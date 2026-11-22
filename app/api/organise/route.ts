@@ -436,7 +436,7 @@ async function organizeWithGemini(
   const exampleKey = formatKey(addDays(today, 1));
 
   const systemInstruction = `
-You are SchoolSync, an AI school-work organizer.
+You are Novus, an AI school-work organizer.
 
 Today is ${todayName}, ${todayKey}.
 
@@ -650,10 +650,10 @@ export async function POST(request: NextRequest) {
       model: fallbackReason ? "local-fallback" : MODEL,
     });
   } catch (error) {
-    console.error("SchoolSync API error:", error);
+    console.error("Novus API error:", error);
 
     return NextResponse.json(
-      { error: "SchoolSync could not process that information." },
+      { error: "Novus could not process that information." },
       { status: 500 }
     );
   }

@@ -8,6 +8,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 type Priority = "High" | "Medium" | "Low";
 
+type Expense = { id: number; title: string; amount: number; category: string; date: string; };
+const EXPENSE_CATEGORIES = ["Food", "Transport", "Education", "Shopping", "Entertainment", "Other"];
+
 type Task = {
   id: number;
   title: string;
@@ -302,6 +305,8 @@ function getGreeting(hour: number): string {
 const SESSION_MINUTES = 45;
 const CAPACITY_OPTIONS = [60, 90, 120, 180];
 const CAPACITY_KEY = "schoolsync-capacity";
+const EXPENSE_STORAGE_KEY = "novus-expenses";
+const BUDGET_STORAGE_KEY = "novus-monthly-budget";
 
 type PlanSession = { taskId: number; minutes: number };
 type PlanDay = { date: string; sessions: PlanSession[]; minutes: number };
@@ -505,6 +510,13 @@ export default function Home() {
   const [notice, setNotice] = useState("");
   const [image, setImage] = useState<{ data: string; mimeType: string; name: string } | null>(null);
   const [capacity, setCapacity] = useState(120);
+  const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [monthlyBudget, setMonthlyBudget] = useState(0);
+  const [expenseTitle, setExpenseTitle] = useState("");
+  const [expenseAmount, setExpenseAmount] = useState("");
+  const [expenseCategory, setExpenseCategory] = useState("Food");
+  const [expenseDate, setExpenseDate] = useState(formatDate(new Date()));
+  const [expenseNotice, setExpenseNotice] = useState("");
 
   // Set on the client only, so server and client markup match (no hydration errors).
   const [todayKey, setTodayKey] = useState("");
@@ -592,6 +604,45 @@ export default function Home() {
       console.error("Could not save tasks:", err);
     }
   }, [tasks, loaded]);
+
+  /* ==================================================
+     SPENDING TRACKER PERSISTENCE
+  ================================================== */
+
+  useEffect(() => {
+    try {
+      const savedExpenses = localStorage.getItem(EXPENSE_STORAGE_KEY);
+      if (savedExpenses) {
+        const parsed = JSON.parse(savedExpenses);
+        if (Array.isArray(parsed)) setExpenses(parsed);
+      }
+      const savedBudget = localStorage.getItem(BUDGET_STORAGE_KEY);
+      if (savedBudget !== null) setMonthlyBudget(Math.max(0, Number(savedBudget) || 0));
+    } catch (err) {
+      console.error("Could not load Novus spending data:", err);
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(EXPENSE_STORAGE_KEY, JSON.stringify(expenses));
+      localStorage.setItem(BUDGET_STORAGE_KEY, String(monthlyBudget));
+    } catch (err) {
+      console.error("Could not save Novus spending data:", err);
+    }
+  }, [expenses, monthlyBudget]);
+
+  function addExpense() {
+    const amount = Number(expenseAmount);
+    if (!expenseTitle.trim() || !Number.isFinite(amount) || amount <= 0 || !expenseDate) {
+      setExpenseNotice("Enter a description, valid amount and date.");
+      return;
+    }
+    setExpenses((current) => [{ id: Date.now(), title: expenseTitle.trim(), amount, category: expenseCategory, date: expenseDate }, ...current]);
+    setExpenseTitle("");
+    setExpenseAmount("");
+    setExpenseNotice("Expense added.");
+  }
 
   /* ==================================================
      PROGRESS
@@ -879,7 +930,7 @@ export default function Home() {
           : "Tasks added. Anything that already existed was skipped."
       );
     } catch (err: any) {
-      console.error("SchoolSync AI error:", err);
+      console.error("Novus AI error:", err);
       setError(
         err?.message ||
           "Could not organize your schoolwork. Please try again."
@@ -992,8 +1043,8 @@ export default function Home() {
             </div>
 
             <div>
-              <h1 className="text-lg font-bold tracking-tight">SchoolSync</h1>
-              <p className="text-xs text-slate-500">Your school life, in sync.</p>
+              <h1 className="text-lg font-bold tracking-tight">Novus</h1>
+              <p className="text-xs text-slate-500">Your life, organized.</p>
             </div>
           </button>
 
@@ -1004,6 +1055,7 @@ export default function Home() {
               ["tasks", "Tasks"],
               ["calendar", "Calendar"],
               ["progress", "Progress"],
+              ["spending", "Spending"],
             ].map(([id, label]) => (
               <button
                 key={id}
@@ -1081,7 +1133,7 @@ export default function Home() {
 
                 <p className="mt-1 text-sm text-slate-500">
                   Paste text, or add a screenshot or photo of a chat, notice or
-                  timetable. SchoolSync will organize it for you.
+                  timetable. Novus will organize it for you.
                 </p>
               </div>
 
@@ -1630,6 +1682,59 @@ History presentation due Monday.`}
         </section>
 
         {/* ==================================================
+            SPENDING ANALYSIS
+        ================================================== */}
+        <section id="spending" className="mt-12 scroll-mt-28">
+          <div className="mb-6 flex flex-col justify-between gap-3 sm:flex-row sm:items-end">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-widest text-emerald-600">Personal finance</p>
+              <h2 className="mt-1 text-3xl font-bold">Spending tracker</h2>
+              <p className="mt-2 text-slate-500">Record everyday expenses and understand where your money goes. Your entries stay in this browser.</p>
+            </div>
+          </div>
+          {(() => {
+            const monthKey = formatDate(new Date()).slice(0, 7);
+            const monthExpenses = expenses.filter((e) => e.date.startsWith(monthKey));
+            const spent = monthExpenses.reduce((sum, e) => sum + e.amount, 0);
+            const remaining = monthlyBudget - spent;
+            const categoryTotals = EXPENSE_CATEGORIES.map((category) => ({ category, total: monthExpenses.filter((e) => e.category === category).reduce((sum, e) => sum + e.amount, 0) })).sort((a, b) => b.total - a.total);
+            const maxCategory = Math.max(1, ...categoryTotals.map((c) => c.total));
+            return (
+              <>
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                  <div className="rounded-2xl bg-slate-950 p-5 text-white"><p className="text-sm text-slate-400">Spent this month</p><p className="mt-2 text-3xl font-bold">₹{spent.toLocaleString("en-IN", { maximumFractionDigits: 2 })}</p></div>
+                  <div className="rounded-2xl border bg-white p-5"><p className="text-sm text-slate-500">Monthly budget</p><p className="mt-2 text-3xl font-bold">₹{monthlyBudget.toLocaleString("en-IN")}</p></div>
+                  <div className="rounded-2xl border bg-white p-5"><p className="text-sm text-slate-500">Budget remaining</p><p className={`mt-2 text-3xl font-bold ${remaining < 0 ? "text-red-600" : "text-emerald-600"}`}>{monthlyBudget ? `₹${remaining.toLocaleString("en-IN", { maximumFractionDigits: 2 })}` : "—"}</p>{monthlyBudget > 0 && <p className="mt-1 text-xs text-slate-400">{remaining < 0 ? "Over budget" : "Available"}</p>}</div>
+                  <div className="rounded-2xl border bg-white p-5"><p className="text-sm text-slate-500">Transactions this month</p><p className="mt-2 text-3xl font-bold">{monthExpenses.length}</p></div>
+                </div>
+                <div className="mt-5 grid gap-5 lg:grid-cols-2">
+                  <div className="rounded-2xl border bg-white p-6 shadow-sm">
+                    <h3 className="text-xl font-bold">Add expense</h3>
+                    <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                      <input value={expenseTitle} onChange={(e) => setExpenseTitle(e.target.value)} placeholder="Description (e.g. lunch)" className="rounded-xl border p-3 text-sm outline-none focus:border-emerald-400 sm:col-span-2" />
+                      <input type="number" min="0.01" step="0.01" value={expenseAmount} onChange={(e) => setExpenseAmount(e.target.value)} placeholder="Amount (₹)" className="rounded-xl border p-3 text-sm outline-none focus:border-emerald-400" />
+                      <select value={expenseCategory} onChange={(e) => setExpenseCategory(e.target.value)} className="rounded-xl border p-3 text-sm">{EXPENSE_CATEGORIES.map((c) => <option key={c}>{c}</option>)}</select>
+                      <input type="date" value={expenseDate} onChange={(e) => setExpenseDate(e.target.value)} className="rounded-xl border p-3 text-sm sm:col-span-2" />
+                    </div>
+                    <button onClick={addExpense} className="mt-4 rounded-xl bg-emerald-600 px-5 py-3 font-semibold text-white hover:bg-emerald-700">+ Add transaction</button>
+                    {expenseNotice && <p role="status" className="mt-3 text-sm text-slate-500">{expenseNotice}</p>}
+                    <div className="mt-6 border-t pt-5"><label className="text-sm font-semibold">Monthly budget (₹)</label><input type="number" min="0" value={monthlyBudget || ""} onChange={(e) => setMonthlyBudget(Math.max(0, Number(e.target.value) || 0))} placeholder="Set your monthly budget" className="mt-2 w-full rounded-xl border p-3 text-sm" /></div>
+                  </div>
+                  <div className="rounded-2xl border bg-white p-6 shadow-sm">
+                    <h3 className="text-xl font-bold">Category breakdown</h3><p className="mt-1 text-sm text-slate-500">Current month</p>
+                    <div className="mt-5 space-y-4">{categoryTotals.map(({category,total}) => <div key={category}><div className="mb-1 flex justify-between text-sm"><span>{category}</span><span className="font-semibold">₹{total.toLocaleString("en-IN", {maximumFractionDigits:2})}</span></div><div className="h-2 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-emerald-500" style={{width: `${(total/maxCategory)*100}%`}} /></div></div>)}</div>
+                  </div>
+                </div>
+                <div className="mt-5 rounded-2xl border bg-white p-6 shadow-sm">
+                  <div className="flex items-center justify-between"><h3 className="text-xl font-bold">Transaction history</h3><span className="text-sm text-slate-500">{expenses.length} total</span></div>
+                  {expenses.length === 0 ? <p className="mt-4 text-sm text-slate-500">No expenses recorded yet. Add your first transaction above.</p> : <div className="mt-4 divide-y">{expenses.slice().sort((a,b)=>b.date.localeCompare(a.date)).map((expense) => <div key={expense.id} className="flex items-center justify-between gap-3 py-3"><div className="min-w-0"><p className="truncate font-semibold">{expense.title}</p><p className="text-xs text-slate-500">{expense.category} · {expense.date}</p></div><div className="flex items-center gap-3"><span className="font-semibold">−₹{expense.amount.toLocaleString("en-IN", {maximumFractionDigits:2})}</span><button onClick={()=>setExpenses((current)=>current.filter((e)=>e.id!==expense.id))} aria-label={`Delete ${expense.title}`} className="rounded-lg px-2 py-1 text-slate-400 hover:bg-red-50 hover:text-red-500">✕</button></div></div>)}</div>}
+                </div>
+              </>
+            );
+          })()}
+        </section>
+
+        {/* ==================================================
             AI CALLOUT
         ================================================== */}
 
@@ -1637,7 +1742,7 @@ History presentation due Monday.`}
           <div className="flex flex-col justify-between gap-6 md:flex-row md:items-center">
             <div>
               <div className="mb-3 inline-flex rounded-full bg-white px-3 py-1 text-xs font-bold text-indigo-600 shadow-sm">
-                ✨ SCHOOLSYNC AI
+                ✨ NOVUS AI
               </div>
 
               <h3 className="text-2xl font-bold text-slate-950">
@@ -1645,7 +1750,7 @@ History presentation due Monday.`}
               </h3>
 
               <p className="mt-2 max-w-2xl text-slate-600">
-                Paste your messy school information and let SchoolSync turn it
+                Paste your messy school information and let Novus turn it
                 into a clear plan you can actually follow.
               </p>
             </div>
@@ -1657,7 +1762,7 @@ History presentation due Monday.`}
               }}
               className="shrink-0 rounded-xl bg-indigo-600 px-5 py-3 font-semibold text-white transition hover:bg-indigo-700"
             >
-              Try SchoolSync →
+              Try Novus →
             </button>
           </div>
         </section>
@@ -1665,7 +1770,7 @@ History presentation due Monday.`}
         {/* FOOTER */}
 
         <footer className="py-10 text-center text-sm text-slate-400">
-          SchoolSync • Built for students, by students.
+          Novus • A workspace for students.
         </footer>
       </div>
     </main>
