@@ -495,6 +495,110 @@ async function resizeImage(
   }
 }
 
+const NOVUS_FLASHCARDS: { topic: string; question: string; answer: string }[] = [
+  { topic: 'AI Foundations', question: 'What is Artificial Intelligence (AI)?', answer: 'The broad concept of creating systems that mimic human intelligence, using algorithms to learn, reason and make decisions.' },
+  { topic: 'AI Foundations', question: 'How does AI work, according to Module 1?', answer: 'It processes large datasets, recognizes patterns and makes decisions using algorithms.' },
+  { topic: 'AI Foundations', question: 'What are the three elements highlighted in AI’s self-improvement process?', answer: 'Learning (from data), reasoning (choosing an approach or algorithm), and self-correction (refining for accuracy).' },
+  { topic: 'AI Foundations', question: 'Name eight foundations of AI.', answer: 'Philosophy, mathematics, economics, neuroscience, psychology, computer engineering, control theory & cybernetics, and linguistics.' },
+  { topic: 'AI Foundations', question: 'What did philosophy contribute to AI?', answer: 'Knowledge, reasoning, logic, formal logical thinking and symbolic reasoning.' },
+  { topic: 'AI Foundations', question: 'What does mathematics contribute to AI?', answer: 'Algorithms, computation, logic, probability, statistics and computability theory.' },
+  { topic: 'AI Foundations', question: 'What does economics contribute to AI?', answer: 'Decision-making ideas including optimization, utility theory, game theory and rational choice.' },
+  { topic: 'AI Foundations', question: 'How did neuroscience influence AI?', answer: 'Study of the brain and neurons inspired artificial neural networks and brain-based learning models.' },
+  { topic: 'AI Foundations', question: 'What did psychology contribute to AI?', answer: 'Understanding human behaviour and learning, including behaviourism, cognitive psychology and learning theories.' },
+  { topic: 'AI Foundations', question: 'What did computer engineering contribute to AI?', answer: 'Hardware, software and computational power needed to implement AI.' },
+  { topic: 'AI Foundations', question: 'What is the contribution of control theory and cybernetics?', answer: 'Feedback systems, self-regulation, goal-driven behaviour and optimization through feedback.' },
+  { topic: 'AI Foundations', question: 'What did linguistics contribute to AI?', answer: 'Language structure, syntax, grammar and language understanding, forming a foundation for NLP.' },
+  { topic: 'AI Foundations', question: 'What are the six components of AI listed in Module 1?', answer: 'Perception, knowledge representation, learning, reasoning, problem solving and natural language processing.' },
+  { topic: 'AI History', question: 'Who proposed the first neural network model in 1943, according to the PDF?', answer: 'Warren McCullough and Walter Pitts.' },
+  { topic: 'AI History', question: 'What is the 1950 AI milestone in Module 1?', answer: 'Alan Turing introduced the Turing Test.' },
+  { topic: 'AI History', question: 'Who coined the term Artificial Intelligence and when?', answer: 'John McCarthy, during the 1956 Dartmouth Conference.' },
+  { topic: 'AI History', question: 'What happened in 1997 in the AI history timeline?', answer: 'IBM Deep Blue defeated chess champion Garry Kasparov.' },
+  { topic: 'AI History', question: 'What AI milestone is associated with 2011?', answer: 'Apple introduced Siri.' },
+  { topic: 'AI Approaches', question: 'What are the four classic approaches to AI?', answer: 'Thinking humanly, thinking rationally, acting humanly and acting rationally.' },
+  { topic: 'AI Approaches', question: 'What is Thinking Humanly?', answer: 'The cognitive-modelling approach: build systems that think like humans and study human thought processes.' },
+  { topic: 'AI Approaches', question: 'What methods are used to study Thinking Humanly?', answer: 'Introspection, psychological experiments and brain imaging.' },
+  { topic: 'AI Approaches', question: 'What is Acting Humanly?', answer: 'The Turing Test approach: build systems whose intelligent behaviour resembles human behaviour.' },
+  { topic: 'AI Approaches', question: 'What capabilities are listed for Acting Humanly?', answer: 'NLP, knowledge representation, automated reasoning, machine learning, computer vision and robotics.' },
+  { topic: 'AI Approaches', question: 'What is Thinking Rationally?', answer: 'The laws-of-thought approach: use formal logic and rules to reason correctly.' },
+  { topic: 'AI Approaches', question: 'Give the medical-rule example of Thinking Rationally from the PDF.', answer: 'If fever AND cough → Flu; if fever AND rash → Measles.' },
+  { topic: 'AI Approaches', question: 'What is Acting Rationally?', answer: 'The rational-agent approach: choose the best possible action toward goals, considering the environment and performance measure.' },
+  { topic: 'AI Agents', question: 'What is an agent?', answer: 'An entity that perceives its environment and performs actions.' },
+  { topic: 'AI Agents', question: 'What is an environment?', answer: 'The external world or situation in which an agent operates.' },
+  { topic: 'AI Agents', question: 'What are sensors and actuators?', answer: 'Sensors receive information from the environment; actuators perform actions on it.' },
+  { topic: 'AI Agents', question: 'What is a percept?', answer: 'Information received by an agent from the environment at a particular moment.' },
+  { topic: 'AI Agents', question: 'What is a percept sequence?', answer: 'The complete history of percepts received by an agent.' },
+  { topic: 'AI Agents', question: 'What is an agent function?', answer: 'A mapping from percept sequences to actions.' },
+  { topic: 'AI Agents', question: 'Agent = ?', answer: 'Architecture + Program.' },
+  { topic: 'AI Agents', question: 'What is an agent program?', answer: 'Software that implements the agent function and decides actions using percepts, sometimes retaining past percepts.' },
+  { topic: 'Rationality', question: 'What is rationality in AI?', answer: 'Choosing the most appropriate action based on the information available to the agent.' },
+  { topic: 'Rationality', question: 'What is a performance measure?', answer: 'A criterion that defines how an agent’s success is judged.' },
+  { topic: 'Rationality', question: 'How is rationality different from omniscience?', answer: 'Omniscience means knowing exact outcomes; rationality means choosing the best action with available information.' },
+  { topic: 'Rationality', question: 'What is limited rationality?', answer: 'Making the best possible decision within available time and computational resources.' },
+  { topic: 'Rationality', question: 'What does probability theory and utility theory contribute to decision theory?', answer: 'Probability theory represents what an agent should believe; utility theory represents what it wants.' },
+  { topic: 'Environment', question: 'What does PEAS stand for?', answer: 'Performance Measure, Environment, Actuators, Sensors.' },
+  { topic: 'Environment', question: 'What is the purpose of PEAS?', answer: 'To specify an intelligent agent’s task environment.' },
+  { topic: 'Environment', question: 'Discrete vs continuous environment?', answer: 'Discrete has limited, well-defined states; continuous has values or states without such discrete limits.' },
+  { topic: 'Environment', question: 'Known vs unknown environment?', answer: 'In a known environment, the agent knows action outcomes; in an unknown one, it may need to learn them.' },
+  { topic: 'Environment', question: 'Observable vs partially observable?', answer: 'Observable: the agent can perceive the complete state; partially observable: it cannot perceive everything.' },
+  { topic: 'Environment', question: 'Static vs dynamic environment?', answer: 'Static does not change while the agent acts; dynamic changes during action.' },
+  { topic: 'Environment', question: 'What is a semi-dynamic environment?', answer: 'The environment itself does not change, but the agent’s performance can change over time.' },
+  { topic: 'Environment', question: 'Single-agent vs multi-agent?', answer: 'Single-agent has one agent; multi-agent has multiple agents that may cooperate or compete.' },
+  { topic: 'Environment', question: 'Deterministic vs non-deterministic?', answer: 'Deterministic: the next state is determined; non-deterministic: outcomes involve uncertainty.' },
+  { topic: 'Environment', question: 'Episodic vs non-episodic?', answer: 'Episodic decisions are independent; non-episodic actions affect future decisions.' },
+  { topic: 'Agent Types', question: 'What are the agent types listed in Module 1?', answer: 'Simple reflex, model-based reflex, goal-based, utility-based and learning-based agents.' },
+  { topic: 'Agent Types', question: 'How does a simple reflex agent choose an action?', answer: 'Using the current percept and condition–action rules, without considering past states.' },
+  { topic: 'Agent Types', question: 'What is a limitation of simple reflex agents?', answer: 'They generally require full observability; in partially observable environments they can get stuck in loops.' },
+  { topic: 'Agent Types', question: 'What is a model-based reflex agent?', answer: 'An agent that uses a model of the world and maintains an internal state to guide actions.' },
+  { topic: 'Machine Learning', question: 'What is Machine Learning?', answer: 'A branch of AI that enables computers to learn patterns from data without being explicitly programmed for every scenario.' },
+  { topic: 'Machine Learning', question: 'How is AI related to ML and Deep Learning?', answer: 'AI is the broader field; ML is a subset of AI; deep learning is a subset of ML using deeper neural networks.' },
+  { topic: 'Machine Learning', question: 'What are four ML characteristics shown in Module 2?', answer: 'Data-driven, adaptive, predictive and automated pattern discovery.' },
+  { topic: 'Machine Learning', question: 'What is Tom Mitchell’s learning definition (E, T, P)?', answer: 'A program learns from experience E with respect to tasks T and performance measure P if its performance at T, measured by P, improves with E.' },
+  { topic: 'Machine Learning', question: 'In Mitchell’s definition, what do E, T and P mean?', answer: 'E = experience; T = task; P = performance measure.' },
+  { topic: 'Machine Learning', question: 'Give the Checkers example for E, T and P.', answer: 'E: playing experience; T: playing checkers; P: percentage of games won.' },
+  { topic: 'Machine Learning', question: 'What are the three basic ML process stages?', answer: 'Data input → abstraction → generalization.' },
+  { topic: 'Machine Learning', question: 'What is abstraction in ML?', answer: 'Converting raw input into a conceptual model that summarizes patterns or relationships.' },
+  { topic: 'Machine Learning', question: 'What can an ML model look like?', answer: 'Rules, equations, trees/graphs or logical groups.' },
+  { topic: 'Machine Learning', question: 'What is generalization?', answer: 'Applying learned patterns to new, unseen data or situations.' },
+  { topic: 'Machine Learning', question: 'What are the three steps of a well-posed learning problem?', answer: 'Define the problem; explain why it needs solving; describe how it could be solved.' },
+  { topic: 'Learning Types', question: 'What is supervised learning?', answer: 'Learning from labelled training examples that include inputs and correct output labels.' },
+  { topic: 'Learning Types', question: 'What is the goal of supervised learning?', answer: 'Train a model to predict or make decisions on new, unseen data.' },
+  { topic: 'Learning Types', question: 'What are the main supervised-learning types?', answer: 'Classification and regression.' },
+  { topic: 'Learning Types', question: 'What is classification?', answer: 'Supervised learning that predicts a predefined category or class.' },
+  { topic: 'Learning Types', question: 'Give classification examples.', answer: 'Spam detection, medical diagnosis categories, weather labels, handwriting recognition and fraud detection.' },
+  { topic: 'Learning Types', question: 'Name classification algorithms listed in Module 2.', answer: 'Naive Bayes, Decision Tree, K-NN, SVM and Logistic Regression.' },
+  { topic: 'Learning Types', question: 'What is regression?', answer: 'Supervised learning used to predict a numerical or continuous value.' },
+  { topic: 'Learning Types', question: 'Simple vs multiple linear regression?', answer: 'Simple regression uses one predictor; multiple regression uses several predictors.' },
+  { topic: 'Learning Types', question: 'What is unsupervised learning?', answer: 'Learning from unlabeled data to discover hidden patterns, groupings or associations.' },
+  { topic: 'Learning Types', question: 'What are two unsupervised-learning techniques in the PDF?', answer: 'Clustering and association analysis.' },
+  { topic: 'Learning Types', question: 'What is clustering?', answer: 'Grouping similar data points based on their features.' },
+  { topic: 'Learning Types', question: 'What is association analysis?', answer: 'Finding relationships between items, often used in market basket analysis.' },
+  { topic: 'Learning Types', question: 'What is reinforcement learning?', answer: 'An agent learns by interacting with an environment, using rewards or penalties to guide actions.' },
+  { topic: 'Learning Types', question: 'Name the reinforcement learning elements.', answer: 'Agent, environment, state, action, reward and policy update.' },
+  { topic: 'Learning Types', question: 'What is the goal of reinforcement learning?', answer: 'Learn a sequence or policy of actions that maximizes total reward.' },
+  { topic: 'ML Applications', question: 'Name three application areas for ML listed in Module 2.', answer: 'Banking and finance, insurance and healthcare.' },
+  { topic: 'ML Tools', question: 'What are the Python libraries listed for ML?', answer: 'NumPy, SciPy, Matplotlib and Scikit-learn.' },
+  { topic: 'ML Tools', question: 'What are some R tools/libraries listed in the PDF?', answer: 'dplyr/plyr, caret, ggplot2, tm, Shiny and R Markdown.' },
+  { topic: 'ML Tools', question: 'What is MATLAB used for in ML?', answer: 'Numerical and matrix computation, built-in ML/statistical functions and parallel or cloud computing support.' },
+  { topic: 'ML Tools', question: 'What are SAS and SPSS used for?', answer: 'Statistical analysis, data management, data mining and advanced analytics.' },
+  { topic: 'ML Tools', question: 'What is Julia noted for in the PDF?', answer: 'Open-source numerical computing and high-performance scientific computation.' },
+  { topic: 'ML Issues', question: 'What is overfitting?', answer: 'A model learns training data and noise too closely, performing well on training data but poorly on new data.' },
+  { topic: 'ML Issues', question: 'How can overfitting be reduced?', answer: 'Use more data, a simpler model or early stopping.' },
+  { topic: 'ML Issues', question: 'What is underfitting?', answer: 'A model is too simple to capture important patterns and performs poorly on both training and testing data.' },
+  { topic: 'ML Issues', question: 'How can underfitting be addressed?', answer: 'Increase model complexity, add features, reduce noise or train longer.' },
+  { topic: 'ML Issues', question: 'What is bias?', answer: 'Error associated with overly simple models; high bias generally leads to underfitting.' },
+  { topic: 'ML Issues', question: 'What is variance?', answer: 'Error from fitting training data and noise too closely; high variance generally leads to overfitting.' },
+  { topic: 'ML Issues', question: 'What is the bias–variance trade-off?', answer: 'Balancing bias and variance to achieve good generalization on unseen data.' },
+  { topic: 'ML Issues', question: 'What does stratified sampling do?', answer: 'Maintains similar class proportions across dataset splits.' },
+  { topic: 'ML Evaluation', question: 'What is the holdout method?', answer: 'Split labelled data into training and testing portions to evaluate supervised-learning performance.' },
+  { topic: 'ML Evaluation', question: 'What training/test proportions are suggested in the PDF?', answer: 'Training: 70–80%; testing: 20–30%.' },
+  { topic: 'ML Evaluation', question: 'What is a confusion matrix?', answer: 'A table comparing predicted classes with actual classes, showing TP, FP, FN and TN.' },
+  { topic: 'ML Evaluation', question: 'Define TP, FP, FN and TN.', answer: 'TP: positive correctly predicted; FP: negative incorrectly predicted positive; FN: positive incorrectly predicted negative; TN: negative correctly predicted.' },
+  { topic: 'ML Evaluation', question: 'What is accuracy?', answer: '(TP + TN) / (TP + TN + FP + FN).' },
+  { topic: 'ML Evaluation', question: 'What is precision?', answer: 'TP / (TP + FP). Of predicted positives, how many are correct.' },
+  { topic: 'ML Evaluation', question: 'What is recall?', answer: 'TP / (TP + FN). Of actual positives, how many are detected.' },
+  { topic: 'ML Evaluation', question: 'What is F1-score?', answer: '2 × precision × recall / (precision + recall).' },
+];
+
 /* ==================================================
    MAIN COMPONENT
 ================================================== */
@@ -502,7 +606,15 @@ async function resizeImage(
 export default function Home() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loaded, setLoaded] = useState(false);
-  const [activeView, setActiveView] = useState<"dashboard" | "spending">("dashboard");
+  const [activeView, setActiveView] = useState<"dashboard" | "spending" | "flashcards">("dashboard");
+  const [flashcardIndex, setFlashcardIndex] = useState(0);
+  const [flashcardFlipped, setFlashcardFlipped] = useState(false);
+  const [flashcardTopic, setFlashcardTopic] = useState("All topics");
+  const [flashcardShuffle, setFlashcardShuffle] = useState(false);
+  const [flashcardOrder, setFlashcardOrder] = useState<number[]>(() => NOVUS_FLASHCARDS.map((_, i) => i));
+  const flashcardTopics = ["All topics", ...Array.from(new Set(NOVUS_FLASHCARDS.map((c) => c.topic)))];
+  const filteredFlashcardIndices = flashcardTopic === "All topics" ? flashcardOrder : flashcardOrder.filter((i) => NOVUS_FLASHCARDS[i].topic === flashcardTopic);
+  const currentFlashcardIndex = filteredFlashcardIndices[Math.min(flashcardIndex, Math.max(0, filteredFlashcardIndices.length - 1))];
 
   const [schoolInfo, setSchoolInfo] = useState("");
   const [showInput, setShowInput] = useState(false);
@@ -1053,10 +1165,11 @@ export default function Home() {
             {[
               ["dashboard", "Dashboard"],
               ["spending", "Spending"],
+              ["flashcards", "Flashcards"],
             ].map(([id, label]) => (
               <button
                 key={id}
-                onClick={() => setActiveView(id as "dashboard" | "spending")}
+                onClick={() => setActiveView(id as "dashboard" | "spending" | "flashcards")}
                 className={`transition ${activeView === id ? "font-semibold text-indigo-600" : "text-slate-600 hover:text-indigo-600"}`}
               >
                 {label}
@@ -1775,6 +1888,30 @@ History presentation due Monday.`}
           </>
         )}
 
+
+        {activeView === "flashcards" && (
+          <section className="mx-auto max-w-5xl">
+            <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+              <div><p className="text-xs font-bold uppercase tracking-widest text-violet-600">Active recall · AI Modules 1 & 2</p><h2 className="mt-2 text-4xl font-bold tracking-tight">Flashcards</h2><p className="mt-2 text-slate-500">Study the concepts, flip to reveal, and move at your own pace.</p></div>
+              <div className="rounded-2xl bg-violet-50 px-4 py-3 text-sm font-medium text-violet-700">{filteredFlashcardIndices.length} cards · PDF-based</div>
+            </div>
+            <div className="mb-5 flex flex-wrap items-center gap-3">
+              <select value={flashcardTopic} onChange={(e) => {setFlashcardTopic(e.target.value);setFlashcardIndex(0);setFlashcardFlipped(false);}} className="rounded-xl border bg-white px-4 py-3 text-sm">{flashcardTopics.map((topic) => <option key={topic}>{topic}</option>)}</select>
+              <button onClick={() => {setFlashcardOrder(NOVUS_FLASHCARDS.map((_,i)=>i).sort(()=>Math.random()-0.5));setFlashcardIndex(0);setFlashcardFlipped(false);}} className="rounded-xl border bg-white px-4 py-3 text-sm font-semibold hover:bg-slate-50">↻ Shuffle cards</button>
+              <button onClick={() => {setFlashcardOrder(NOVUS_FLASHCARDS.map((_,i)=>i));setFlashcardTopic("All topics");setFlashcardIndex(0);setFlashcardFlipped(false);}} className="rounded-xl border bg-white px-4 py-3 text-sm font-semibold hover:bg-slate-50">Reset deck</button>
+            </div>
+            {filteredFlashcardIndices.length > 0 && currentFlashcardIndex !== undefined ? (<div>
+              <div className="mb-3 flex items-center justify-between text-sm text-slate-500"><span>{flashcardIndex+1} / {filteredFlashcardIndices.length}</span><span>{NOVUS_FLASHCARDS[currentFlashcardIndex].topic}</span></div>
+              <button onClick={() => setFlashcardFlipped((v)=>!v)} className="group min-h-[340px] w-full rounded-3xl border border-violet-100 bg-white p-8 text-left shadow-sm transition hover:shadow-lg sm:p-12">
+                <div className="mb-8 flex items-center justify-between"><span className="rounded-full bg-violet-100 px-3 py-1 text-xs font-bold uppercase tracking-wide text-violet-700">{flashcardFlipped ? "Answer" : "Question"}</span><span className="text-sm text-slate-400">Click to flip ↻</span></div>
+                <div className="flex min-h-[190px] items-center justify-center"><p className="max-w-3xl text-center text-2xl font-semibold leading-relaxed sm:text-3xl">{flashcardFlipped ? NOVUS_FLASHCARDS[currentFlashcardIndex].answer : NOVUS_FLASHCARDS[currentFlashcardIndex].question}</p></div><p className="mt-6 text-center text-sm text-slate-400">{flashcardFlipped ? "Click to return to the question" : "Try answering before you reveal it"}</p>
+              </button>
+              <div className="mt-5 h-2 overflow-hidden rounded-full bg-slate-200"><div className="h-full rounded-full bg-violet-500 transition-all" style={{width:`${((flashcardIndex+1)/filteredFlashcardIndices.length)*100}%`}} /></div>
+              <div className="mt-5 flex items-center justify-between gap-3"><button disabled={flashcardIndex===0} onClick={()=>{setFlashcardIndex((i)=>Math.max(0,i-1));setFlashcardFlipped(false);}} className="rounded-xl border bg-white px-5 py-3 font-semibold disabled:opacity-40">← Previous</button><button onClick={()=>setFlashcardFlipped((v)=>!v)} className="rounded-xl bg-violet-600 px-5 py-3 font-semibold text-white hover:bg-violet-700">{flashcardFlipped?"Hide answer":"Reveal answer"}</button><button disabled={flashcardIndex>=filteredFlashcardIndices.length-1} onClick={()=>{setFlashcardIndex((i)=>Math.min(filteredFlashcardIndices.length-1,i+1));setFlashcardFlipped(false);}} className="rounded-xl border bg-white px-5 py-3 font-semibold disabled:opacity-40">Next →</button></div>
+            </div>) : <div className="rounded-2xl border bg-white p-8 text-center text-slate-500">No cards in this topic.</div>}
+            <div className="mt-8 rounded-2xl border bg-white p-5"><h3 className="font-bold">How to use this deck</h3><p className="mt-2 text-sm leading-6 text-slate-500">Read the question, answer from memory, then reveal the card. Filter by topic to focus on a module or concept. These cards are built from the two uploaded AI PDFs.</p></div>
+          </section>
+        )}
         {/* FOOTER */}
 
         <footer className="py-10 text-center text-sm text-slate-400">
