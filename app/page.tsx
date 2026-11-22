@@ -24,6 +24,24 @@ type Task = {
   scheduledDate?: string;
 };
 
+type PersonPoint = {
+  id: number;
+  name: string;
+  query: string;
+  lat: number | null;
+  lon: number | null;
+  resolvedName?: string;
+};
+
+type MeetupResult = {
+  lat: number;
+  lon: number;
+  avgKm: number;
+  maxKm: number;
+  distances: { id: number; name: string; km: number }[];
+  placeLabel?: string;
+};
+
 const STORAGE_KEY = "schoolsync-tasks";
 
 const PRIORITIES: Priority[] = ["High", "Medium", "Low"];
@@ -91,7 +109,7 @@ const MONTH_NAMES = [
 ];
 
 const MONTH_PATTERN =
-  "(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\\.?";
+  "(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?";
 
 const WEEKDAY_PATTERNS: RegExp[] = [
   /\b(sunday|sun)\b/,
@@ -495,6 +513,58 @@ async function resizeImage(
   }
 }
 
+/* ==================================================
+   MEETUP DISTANCE HELPERS
+================================================== */
+
+function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const R = 6371;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+function computeBestMeetingPoint(
+  points: { id: number; name: string; lat: number; lon: number }[]
+): MeetupResult {
+  let lat = points.reduce((s, p) => s + p.lat, 0) / points.length;
+  let lon = points.reduce((s, p) => s + p.lon, 0) / points.length;
+
+  for (let iter = 0; iter < 40; iter++) {
+    let numLat = 0;
+    let numLon = 0;
+    let denom = 0;
+
+    for (const p of points) {
+      const dist = Math.max(haversineKm(lat, lon, p.lat, p.lon), 0.001);
+      const w = 1 / dist;
+      numLat += p.lat * w;
+      numLon += p.lon * w;
+      denom += w;
+    }
+
+    if (denom > 0) {
+      lat = numLat / denom;
+      lon = numLon / denom;
+    }
+  }
+
+  const distances = points.map((p) => ({
+    id: p.id,
+    name: p.name || `Person ${p.id}`,
+    km: haversineKm(p.lat, p.lon, lat, lon),
+  }));
+
+  const avgKm = distances.reduce((s, d) => s + d.km, 0) / distances.length;
+  const maxKm = Math.max(...distances.map((d) => d.km));
+
+  return { lat, lon, avgKm, maxKm, distances };
+}
+
 const NOVUS_FLASHCARDS: { topic: string; question: string; answer: string }[] = [
   { topic: 'AI Foundations', question: 'What is Artificial Intelligence (AI)?', answer: 'The broad concept of creating systems that mimic human intelligence, using algorithms to learn, reason and make decisions.' },
   { topic: 'AI Foundations', question: 'How does AI work, according to Module 1?', answer: 'It processes large datasets, recognizes patterns and makes decisions using algorithms.' },
@@ -606,11 +676,10 @@ const NOVUS_FLASHCARDS: { topic: string; question: string; answer: string }[] = 
 export default function Home() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loaded, setLoaded] = useState(false);
-  const [activeView, setActiveView] = useState<"dashboard" | "spending" | "flashcards" | "visuals">("dashboard");
+  const [activeView, setActiveView] = useState<"dashboard" | "spending" | "flashcards" | "visuals" | "meetup">("dashboard");
   const [flashcardIndex, setFlashcardIndex] = useState(0);
   const [flashcardFlipped, setFlashcardFlipped] = useState(false);
   const [flashcardTopic, setFlashcardTopic] = useState("All topics");
-  const [flashcardShuffle, setFlashcardShuffle] = useState(false);
   const [flashcardOrder, setFlashcardOrder] = useState<number[]>(() => NOVUS_FLASHCARDS.map((_, i) => i));
   const flashcardTopics = ["All topics", ...Array.from(new Set(NOVUS_FLASHCARDS.map((c) => c.topic)))];
   const filteredFlashcardIndices = flashcardTopic === "All topics" ? flashcardOrder : flashcardOrder.filter((i) => NOVUS_FLASHCARDS[i].topic === flashcardTopic);
@@ -942,10 +1011,13 @@ export default function Home() {
   }
 
   function goTo(id: string) {
-    document.getElementById(id)?.scrollIntoView({
-      behavior: "smooth",
-      block: "start",
-    });
+    setActiveView("dashboard");
+    setTimeout(() => {
+      document.getElementById(id)?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    }, 0);
   }
 
   /* ==================================================
@@ -1143,12 +1215,20 @@ export default function Home() {
     );
   }
 
+  const navItems: ["dashboard" | "spending" | "flashcards" | "visuals" | "meetup", string][] = [
+    ["dashboard", "Dashboard"],
+    ["spending", "Spending"],
+    ["flashcards", "Flashcards"],
+    ["visuals", "Visual Lab"],
+    ["meetup", "Meetup"],
+  ];
+
   return (
     <main className="min-h-screen bg-[#f7f8fc] text-slate-900">
       {/* NAVIGATION */}
 
       <nav className="sticky top-0 z-50 border-b border-slate-200 bg-white/95 backdrop-blur">
-        <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-5">
+        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-6 py-4">
           <button
             onClick={() => goTo("dashboard")}
             className="flex items-center gap-3 text-left"
@@ -1163,24 +1243,23 @@ export default function Home() {
             </div>
           </button>
 
-          <div className="hidden items-center gap-6 text-sm font-medium sm:flex">
-            {[
-              ["dashboard", "Dashboard"],
-              ["spending", "Spending"],
-              ["flashcards", "Flashcards"],
-              ["visuals", "Visual Lab"],
-            ].map(([id, label]) => (
+          <div className="flex flex-wrap items-center gap-4 text-sm font-medium sm:gap-6">
+            {navItems.map(([id, label]) => (
               <button
                 key={id}
-                onClick={() => setActiveView(id as "dashboard" | "spending" | "flashcards" | "visuals")}
-                className={`transition ${activeView === id ? "font-semibold text-indigo-600" : "text-slate-600 hover:text-indigo-600"}`}
+                onClick={() => setActiveView(id)}
+                className={`transition ${
+                  activeView === id
+                    ? "font-semibold text-indigo-600"
+                    : "text-slate-600 hover:text-indigo-600"
+                }`}
               >
                 {label}
               </button>
             ))}
           </div>
 
-          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-indigo-100 font-semibold text-indigo-700">
+          <div className="hidden h-10 w-10 items-center justify-center rounded-full bg-indigo-100 font-semibold text-indigo-700 sm:flex">
             S
           </div>
         </div>
@@ -1189,613 +1268,645 @@ export default function Home() {
       <div className="mx-auto max-w-7xl px-6 py-10">
         {activeView === "dashboard" && (
           <>
-        {/* ==================================================
-            DASHBOARD
-        ================================================== */}
+            {/* ==================================================
+                DASHBOARD
+            ================================================== */}
 
-        <section id="dashboard" className="scroll-mt-28">
-          <div className="mb-8">
-            <div className="flex flex-col justify-between gap-5 md:flex-row md:items-end">
-              <div>
-                <p className="mb-2 text-sm font-semibold uppercase tracking-wider text-indigo-600">
-                  Student dashboard
-                </p>
+            <section id="dashboard" className="scroll-mt-28">
+              <div className="mb-8">
+                <div className="flex flex-col justify-between gap-5 md:flex-row md:items-end">
+                  <div>
+                    <p className="mb-2 text-sm font-semibold uppercase tracking-wider text-indigo-600">
+                      Student dashboard
+                    </p>
 
-                <h2 className="text-4xl font-bold tracking-tight text-slate-950 sm:text-5xl">
-                  {greeting} 👋
-                </h2>
+                    <h2 className="text-4xl font-bold tracking-tight text-slate-950 sm:text-5xl">
+                      {greeting} 👋
+                    </h2>
 
-                <p className="mt-3 max-w-2xl text-lg text-slate-500">
-                  Here&apos;s what needs your attention today.
-                </p>
+                    <p className="mt-3 max-w-2xl text-lg text-slate-500">
+                      Here&apos;s what needs your attention today.
+                    </p>
+                  </div>
+
+                  <button
+                    onClick={() => {
+                      setShowInput(!showInput);
+                      setError("");
+                      setNotice("");
+                    }}
+                    className="rounded-xl bg-slate-900 px-5 py-3 font-semibold text-white shadow-sm transition hover:-translate-y-0.5 hover:bg-slate-800"
+                  >
+                    + Add schoolwork
+                  </button>
+                </div>
               </div>
 
-              <button
-                onClick={() => {
-                  setShowInput(!showInput);
-                  setError("");
-                  setNotice("");
-                }}
-                className="rounded-xl bg-slate-900 px-5 py-3 font-semibold text-white shadow-sm transition hover:-translate-y-0.5 hover:bg-slate-800"
-              >
-                + Add schoolwork
-              </button>
-            </div>
-          </div>
+              {notice && !showInput && (
+                <div
+                  role="status"
+                  className="mb-6 flex items-center justify-between rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700"
+                >
+                  <span>{notice}</span>
+                  <button
+                    onClick={() => setNotice("")}
+                    aria-label="Dismiss message"
+                    className="ml-4 font-bold"
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
 
-          {notice && !showInput && (
-            <div
-              role="status"
-              className="mb-6 flex items-center justify-between rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700"
-            >
-              <span>{notice}</span>
-              <button
-                onClick={() => setNotice("")}
-                aria-label="Dismiss message"
-                className="ml-4 font-bold"
-              >
-                ✕
-              </button>
-            </div>
-          )}
+              {/* AI INPUT */}
 
-          {/* AI INPUT */}
+              {showInput && (
+                <section className="mb-8 overflow-hidden rounded-2xl border border-indigo-100 bg-white shadow-sm">
+                  <div className="border-b border-slate-100 px-6 py-5">
+                    <p className="text-lg font-bold">Add school information</p>
 
-          {showInput && (
-            <section className="mb-8 overflow-hidden rounded-2xl border border-indigo-100 bg-white shadow-sm">
-              <div className="border-b border-slate-100 px-6 py-5">
-                <p className="text-lg font-bold">Add school information</p>
+                    <p className="mt-1 text-sm text-slate-500">
+                      Paste text, or add a screenshot or photo of a chat, notice or
+                      timetable. Novus will organize it for you.
+                    </p>
+                  </div>
 
-                <p className="mt-1 text-sm text-slate-500">
-                  Paste text, or add a screenshot or photo of a chat, notice or
-                  timetable. Novus will organize it for you.
-                </p>
-              </div>
-
-              <div className="p-6">
-                <textarea
-                  value={schoolInfo}
-                  onChange={(event) => {
-                    setSchoolInfo(event.target.value);
-                    setError("");
-                  }}
-                  onPaste={(event) => {
-                    const file = Array.from(event.clipboardData.files).find((f) =>
-                      f.type.startsWith("image/")
-                    );
-                    if (file) {
-                      event.preventDefault();
-                      void handleFile(file);
-                    }
-                  }}
-                  placeholder={`Example:
+                  <div className="p-6">
+                    <textarea
+                      value={schoolInfo}
+                      onChange={(event) => {
+                        setSchoolInfo(event.target.value);
+                        setError("");
+                      }}
+                      onPaste={(event) => {
+                        const file = Array.from(event.clipboardData.files).find((f) =>
+                          f.type.startsWith("image/")
+                        );
+                        if (file) {
+                          event.preventDefault();
+                          void handleFile(file);
+                        }
+                      }}
+                      placeholder={`Example:
 
 Math worksheet 4 due Thursday.
 Bio quiz Friday on chapter 7.
 Don't forget your lab coat tomorrow.
 History presentation due Monday.`}
-                  className="min-h-40 w-full resize-none rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm outline-none transition placeholder:text-slate-400 focus:border-indigo-400 focus:bg-white focus:ring-4 focus:ring-indigo-50"
-                />
-
-                <div className="mt-3 flex flex-wrap items-center gap-3">
-                  <label className="cursor-pointer rounded-xl border border-dashed border-indigo-300 bg-indigo-50 px-4 py-2 text-sm font-semibold text-indigo-700 transition hover:bg-indigo-100">
-                    📷 Add screenshot or chat export
-                    <input
-                      type="file"
-                      accept="image/*,.txt,text/plain"
-                      className="hidden"
-                      onChange={(event) => {
-                        void handleFile(event.target.files?.[0]);
-                        event.target.value = "";
-                      }}
+                      className="min-h-40 w-full resize-none rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm outline-none transition placeholder:text-slate-400 focus:border-indigo-400 focus:bg-white focus:ring-4 focus:ring-indigo-50"
                     />
-                  </label>
 
-                  {image && (
-                    <span className="inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1.5 text-xs text-slate-600">
-                      🖼️ {image.name}
-                      <button
-                        onClick={() => setImage(null)}
-                        aria-label="Remove image"
-                        className="font-bold text-slate-400 hover:text-red-500"
+                    <div className="mt-3 flex flex-wrap items-center gap-3">
+                      <label className="cursor-pointer rounded-xl border border-dashed border-indigo-300 bg-indigo-50 px-4 py-2 text-sm font-semibold text-indigo-700 transition hover:bg-indigo-100">
+                        📷 Add screenshot or chat export
+                        <input
+                          type="file"
+                          accept="image/*,.txt,text/plain"
+                          className="hidden"
+                          onChange={(event) => {
+                            void handleFile(event.target.files?.[0]);
+                            event.target.value = "";
+                          }}
+                        />
+                      </label>
+
+                      {image && (
+                        <span className="inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1.5 text-xs text-slate-600">
+                          🖼️ {image.name}
+                          <button
+                            onClick={() => setImage(null)}
+                            aria-label="Remove image"
+                            className="font-bold text-slate-400 hover:text-red-500"
+                          >
+                            ✕
+                          </button>
+                        </span>
+                      )}
+
+                      <span className="text-xs text-slate-400">
+                        or press Ctrl+V to paste a screenshot
+                      </span>
+                    </div>
+
+                    {error && (
+                      <div
+                        role="alert"
+                        className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
                       >
-                        ✕
-                      </button>
-                    </span>
-                  )}
+                        ⚠️ {error}
+                      </div>
+                    )}
 
-                  <span className="text-xs text-slate-400">
-                    or press Ctrl+V to paste a screenshot
-                  </span>
+                    <div className="mt-4 flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
+                      <p className="text-xs text-slate-400">
+                        ✨ AI will identify deadlines, subjects, and priorities.
+                      </p>
+
+                      <button
+                        onClick={organizeTasks}
+                        disabled={(!schoolInfo.trim() && !image) || isOrganizing}
+                        className="rounded-xl bg-indigo-600 px-6 py-3 font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {isOrganizing ? "✨ Organizing..." : "✨ Organize with AI"}
+                      </button>
+                    </div>
+                  </div>
+                </section>
+              )}
+
+              {/* TOP CARDS */}
+
+              <section className="grid gap-5 lg:grid-cols-3">
+                {/* NEXT TASK */}
+
+                <div className="relative overflow-hidden rounded-2xl bg-slate-950 p-6 text-white shadow-lg lg:col-span-2">
+                  <div className="absolute -right-16 -top-16 h-40 w-40 rounded-full bg-indigo-500/20 blur-2xl" />
+
+                  <div className="relative">
+                    <div className="mb-6 flex items-center justify-between">
+                      <div>
+                        <p className="text-sm font-medium text-slate-400">
+                          WHAT SHOULD I DO NOW?
+                        </p>
+
+                        <p className="mt-1 text-xs text-slate-500">
+                          Highest priority first, then earliest date
+                        </p>
+                      </div>
+
+                      <span className="rounded-full bg-red-500/15 px-3 py-1 text-xs font-bold text-red-300">
+                        🔥 NEXT UP
+                      </span>
+                    </div>
+
+                    {nextTask ? (
+                      <>
+                        <h3 className="text-2xl font-bold sm:text-3xl">
+                          {nextTask.title}
+                        </h3>
+
+                        <div className="mt-4 flex flex-wrap gap-2">
+                          <span className="rounded-full bg-white/10 px-3 py-1.5 text-sm text-slate-300">
+                            {nextTask.subject}
+                          </span>
+
+                          <span className="rounded-full bg-white/10 px-3 py-1.5 text-sm text-slate-300">
+                            Due {nextTask.due}
+                          </span>
+
+                          {!!nextTask.estimatedMinutes && (
+                            <span className="rounded-full bg-white/10 px-3 py-1.5 text-sm text-slate-300">
+                              ~{nextTask.estimatedMinutes} min
+                            </span>
+                          )}
+                        </div>
+
+                        {nextTask.reason && (
+                          <p className="mt-4 max-w-xl text-sm leading-6 text-slate-400">
+                            {nextTask.reason}
+                          </p>
+                        )}
+
+                        <div className="mt-6 flex items-center justify-between border-t border-white/10 pt-5">
+                          <div>
+                            <p className="text-sm text-slate-400">Recommended</p>
+                            <p className="font-semibold">Start with this task</p>
+                          </div>
+
+                          <button
+                            onClick={() => toggleTask(nextTask.id)}
+                            className="rounded-xl bg-white px-4 py-2.5 text-sm font-bold text-slate-900 transition hover:bg-slate-100"
+                          >
+                            Mark done ✓
+                          </button>
+                        </div>
+                      </>
+                    ) : (
+                      <div>
+                        <h3 className="text-2xl font-bold">
+                          You&apos;re all caught up! 🎉
+                        </h3>
+
+                        <p className="mt-2 text-slate-400">
+                          Nothing urgent needs your attention.
+                        </p>
+                      </div>
+                    )}
+                  </div>
                 </div>
 
-                {error && (
-                  <div
-                    role="alert"
-                    className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
-                  >
-                    ⚠️ {error}
-                  </div>
-                )}
+                {/* PROGRESS */}
 
-                <div className="mt-4 flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
-                  <p className="text-xs text-slate-400">
-                    ✨ AI will identify deadlines, subjects, and priorities.
+                <div
+                  id="progress"
+                  className="scroll-mt-28 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm"
+                >
+                  <p className="text-sm font-semibold text-slate-500">
+                    OVERALL PROGRESS
                   </p>
 
-                  <button
-                    onClick={organizeTasks}
-                    disabled={(!schoolInfo.trim() && !image) || isOrganizing}
-                    className="rounded-xl bg-indigo-600 px-6 py-3 font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  <div className="mt-6 flex items-end justify-between">
+                    <span className="text-5xl font-bold tracking-tight">
+                      {progress}%
+                    </span>
+
+                    <span className="pb-1 text-sm text-slate-400">
+                      {completedTasks}/{tasks.length} complete
+                    </span>
+                  </div>
+
+                  <div
+                    className="mt-6 h-3 overflow-hidden rounded-full bg-slate-100"
+                    role="progressbar"
+                    aria-valuenow={progress}
+                    aria-valuemin={0}
+                    aria-valuemax={100}
                   >
-                    {isOrganizing ? "✨ Organizing..." : "✨ Organize with AI"}
+                    <div
+                      className="h-full rounded-full bg-indigo-600 transition-all duration-500"
+                      style={{ width: `${progress}%` }}
+                    />
+                  </div>
+
+                  <p className="mt-4 text-sm text-slate-500">
+                    {tasks.length === 0
+                      ? "Add some schoolwork to start tracking."
+                      : progress >= 100
+                      ? "Amazing work. Everything is done!"
+                      : "Keep going. Small progress adds up."}
+                  </p>
+                </div>
+              </section>
+            </section>
+
+            {/* ==================================================
+                STUDY PLAN
+            ================================================== */}
+
+            <section id="plan" className="mt-12 scroll-mt-28">
+              <div className="mb-5 flex flex-col justify-between gap-3 sm:flex-row sm:items-end">
+                <div>
+                  <h3 className="text-2xl font-bold">Your study plan</h3>
+                  <p className="mt-1 text-sm text-slate-500">
+                    Work is spread over the days before each deadline so no single day gets crushed.
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-3">
+                  <label className="flex items-center gap-2 text-sm text-slate-500">
+                    Study time per day
+                    <select
+                      value={capacity}
+                      onChange={(event) => changeCapacity(Number(event.target.value))}
+                      className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm font-semibold text-slate-700"
+                    >
+                      {CAPACITY_OPTIONS.map((minutes) => (
+                        <option key={minutes} value={minutes}>
+                          {minutes} min
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <button
+                    onClick={exportCalendar}
+                    className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold transition hover:bg-slate-50"
+                  >
+                    📅 Add to my calendar (.ics)
                   </button>
                 </div>
               </div>
-            </section>
-          )}
 
-          {/* TOP CARDS */}
-
-          <section className="grid gap-5 lg:grid-cols-3">
-            {/* NEXT TASK */}
-
-            <div className="relative overflow-hidden rounded-2xl bg-slate-950 p-6 text-white shadow-lg lg:col-span-2">
-              <div className="absolute -right-16 -top-16 h-40 w-40 rounded-full bg-indigo-500/20 blur-2xl" />
-
-              <div className="relative">
-                <div className="mb-6 flex items-center justify-between">
-                  <div>
-                    <p className="text-sm font-medium text-slate-400">
-                      WHAT SHOULD I DO NOW?
-                    </p>
-
-                    <p className="mt-1 text-xs text-slate-500">
-                      Highest priority first, then earliest date
-                    </p>
-                  </div>
-
-                  <span className="rounded-full bg-red-500/15 px-3 py-1 text-xs font-bold text-red-300">
-                    🔥 NEXT UP
-                  </span>
+              {!hasPlannableTasks ? (
+                <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-500">
+                  Add some schoolwork with deadlines and your daily plan will appear here.
                 </div>
+              ) : (
+                <div className="space-y-5">
+                  {planWarnings.length > 0 && (
+                    <div
+                      role="status"
+                      className="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-800"
+                    >
+                      <p className="font-bold">⚠️ Heads up</p>
+                      <ul className="mt-2 list-disc space-y-1 pl-5">
+                        {planWarnings.map((warning) => (
+                          <li key={warning}>{warning}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
 
-                {nextTask ? (
-                  <>
-                    <h3 className="text-2xl font-bold sm:text-3xl">
-                      {nextTask.title}
-                    </h3>
+                  <div className="grid gap-5 lg:grid-cols-5">
+                    <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm lg:col-span-2">
+                      <div className="flex items-baseline justify-between">
+                        <p className="text-sm font-semibold text-slate-500">TODAY</p>
+                        <p className="text-sm text-slate-400">{todayMinutes} min planned</p>
+                      </div>
 
-                    <div className="mt-4 flex flex-wrap gap-2">
-                      <span className="rounded-full bg-white/10 px-3 py-1.5 text-sm text-slate-300">
-                        {nextTask.subject}
-                      </span>
-
-                      <span className="rounded-full bg-white/10 px-3 py-1.5 text-sm text-slate-300">
-                        Due {nextTask.due}
-                      </span>
-
-                      {!!nextTask.estimatedMinutes && (
-                        <span className="rounded-full bg-white/10 px-3 py-1.5 text-sm text-slate-300">
-                          ~{nextTask.estimatedMinutes} min
-                        </span>
+                      {todayItems.length === 0 ? (
+                        <p className="mt-4 text-sm text-slate-500">
+                          Nothing is planned for today. Enjoy the breathing room.
+                        </p>
+                      ) : (
+                        <ul className="mt-4 space-y-3">
+                          {todayItems.map(({ task, minutes }) => (
+                            <li
+                              key={task.id}
+                              className="flex items-center justify-between gap-3 rounded-xl bg-slate-50 p-3"
+                            >
+                              <div>
+                                <p className="text-sm font-semibold">{task.title}</p>
+                                <p className="text-xs text-slate-400">
+                                  {task.subject} • {minutes} min today • due {task.due}
+                                </p>
+                              </div>
+                              <button
+                                onClick={() => toggleTask(task.id)}
+                                className="shrink-0 rounded-full bg-white px-3 py-1.5 text-xs font-bold shadow-sm ring-1 ring-slate-200 hover:bg-indigo-50"
+                              >
+                                Done
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
                       )}
                     </div>
 
-                    {nextTask.reason && (
-                      <p className="mt-4 max-w-xl text-sm leading-6 text-slate-400">
-                        {nextTask.reason}
+                    <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm lg:col-span-3">
+                      <p className="text-sm font-semibold text-slate-500">NEXT 7 DAYS</p>
+                      <p className="mt-1 text-xs text-slate-400">
+                        Bar height shows planned minutes against your {capacity} min limit. Red means overloaded.
                       </p>
-                    )}
 
-                    <div className="mt-6 flex items-center justify-between border-t border-white/10 pt-5">
-                      <div>
-                        <p className="text-sm text-slate-400">Recommended</p>
-                        <p className="font-semibold">Start with this task</p>
+                      <div className="mt-5 grid grid-cols-7 gap-2">
+                        {weekView.map((day) => {
+                          const percent = Math.min(100, Math.round((day.minutes / capacity) * 100));
+                          const over = day.minutes > capacity;
+
+                          return (
+                            <div key={day.key} className="flex flex-col items-center gap-2">
+                              <div className="flex h-28 w-full items-end overflow-hidden rounded-lg bg-slate-100">
+                                <div
+                                  className={`w-full transition-all ${over ? "bg-red-400" : "bg-indigo-500"}`}
+                                  style={{ height: `${percent}%` }}
+                                />
+                              </div>
+                              <p className="text-xs font-semibold text-slate-600">{day.label}</p>
+                              <p className="text-[11px] text-slate-400">{day.minutes} min</p>
+                            </div>
+                          );
+                        })}
                       </div>
-
-                      <button
-                        onClick={() => toggleTask(nextTask.id)}
-                        className="rounded-xl bg-white px-4 py-2.5 text-sm font-bold text-slate-900 transition hover:bg-slate-100"
-                      >
-                        Mark done ✓
-                      </button>
                     </div>
-                  </>
-                ) : (
-                  <div>
-                    <h3 className="text-2xl font-bold">
-                      You&apos;re all caught up! 🎉
-                    </h3>
-
-                    <p className="mt-2 text-slate-400">
-                      Nothing urgent needs your attention.
-                    </p>
                   </div>
-                )}
-              </div>
-            </div>
-
-            {/* PROGRESS */}
-
-            <div
-              id="progress"
-              className="scroll-mt-28 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm"
-            >
-              <p className="text-sm font-semibold text-slate-500">
-                OVERALL PROGRESS
-              </p>
-
-              <div className="mt-6 flex items-end justify-between">
-                <span className="text-5xl font-bold tracking-tight">
-                  {progress}%
-                </span>
-
-                <span className="pb-1 text-sm text-slate-400">
-                  {completedTasks}/{tasks.length} complete
-                </span>
-              </div>
-
-              <div
-                className="mt-6 h-3 overflow-hidden rounded-full bg-slate-100"
-                role="progressbar"
-                aria-valuenow={progress}
-                aria-valuemin={0}
-                aria-valuemax={100}
-              >
-                <div
-                  className="h-full rounded-full bg-indigo-600 transition-all duration-500"
-                  style={{ width: `${progress}%` }}
-                />
-              </div>
-
-              <p className="mt-4 text-sm text-slate-500">
-                {tasks.length === 0
-                  ? "Add some schoolwork to start tracking."
-                  : progress >= 100
-                  ? "Amazing work. Everything is done!"
-                  : "Keep going. Small progress adds up."}
-              </p>
-            </div>
-          </section>
-        </section>
-        {/* ==================================================
-            STUDY PLAN
-        ================================================== */}
-
-        <section id="plan" className="mt-12 scroll-mt-28">
-          <div className="mb-5 flex flex-col justify-between gap-3 sm:flex-row sm:items-end">
-            <div>
-              <h3 className="text-2xl font-bold">Your study plan</h3>
-              <p className="mt-1 text-sm text-slate-500">
-                Work is spread over the days before each deadline so no single day gets crushed.
-              </p>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-3">
-              <label className="flex items-center gap-2 text-sm text-slate-500">
-                Study time per day
-                <select
-                  value={capacity}
-                  onChange={(event) => changeCapacity(Number(event.target.value))}
-                  className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm font-semibold text-slate-700"
-                >
-                  {CAPACITY_OPTIONS.map((minutes) => (
-                    <option key={minutes} value={minutes}>
-                      {minutes} min
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <button
-                onClick={exportCalendar}
-                className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold transition hover:bg-slate-50"
-              >
-                📅 Add to my calendar (.ics)
-              </button>
-            </div>
-          </div>
-
-          {!hasPlannableTasks ? (
-            <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-500">
-              Add some schoolwork with deadlines and your daily plan will appear here.
-            </div>
-          ) : (
-            <div className="space-y-5">
-              {planWarnings.length > 0 && (
-                <div
-                  role="status"
-                  className="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-800"
-                >
-                  <p className="font-bold">⚠️ Heads up</p>
-                  <ul className="mt-2 list-disc space-y-1 pl-5">
-                    {planWarnings.map((warning) => (
-                      <li key={warning}>{warning}</li>
-                    ))}
-                  </ul>
                 </div>
               )}
+            </section>
 
-              <div className="grid gap-5 lg:grid-cols-5">
-                <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm lg:col-span-2">
-                  <div className="flex items-baseline justify-between">
-                    <p className="text-sm font-semibold text-slate-500">TODAY</p>
-                    <p className="text-sm text-slate-400">{todayMinutes} min planned</p>
-                  </div>
+            {/* ==================================================
+                TASKS
+            ================================================== */}
 
-                  {todayItems.length === 0 ? (
-                    <p className="mt-4 text-sm text-slate-500">
-                      Nothing is planned for today. Enjoy the breathing room.
-                    </p>
-                  ) : (
-                    <ul className="mt-4 space-y-3">
-                      {todayItems.map(({ task, minutes }) => (
-                        <li
-                          key={task.id}
-                          className="flex items-center justify-between gap-3 rounded-xl bg-slate-50 p-3"
-                        >
-                          <div>
-                            <p className="text-sm font-semibold">{task.title}</p>
-                            <p className="text-xs text-slate-400">
-                              {task.subject} • {minutes} min today • due {task.due}
-                            </p>
-                          </div>
-                          <button
-                            onClick={() => toggleTask(task.id)}
-                            className="shrink-0 rounded-full bg-white px-3 py-1.5 text-xs font-bold shadow-sm ring-1 ring-slate-200 hover:bg-indigo-50"
-                          >
-                            Done
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
+            <section id="tasks" className="mt-12 scroll-mt-28">
+              <div className="mb-5 flex items-center justify-between">
+                <div>
+                  <h3 className="text-2xl font-bold">Your schoolwork</h3>
+                  <p className="mt-1 text-sm text-slate-500">
+                    Everything in one place.
+                  </p>
                 </div>
 
-                <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm lg:col-span-3">
-                  <p className="text-sm font-semibold text-slate-500">NEXT 7 DAYS</p>
-                  <p className="mt-1 text-xs text-slate-400">
-                    Bar height shows planned minutes against your {capacity} min limit. Red means overloaded.
+                <span className="rounded-full bg-white px-3 py-1.5 text-sm font-medium text-slate-500 shadow-sm ring-1 ring-slate-200">
+                  {tasks.length} {tasks.length === 1 ? "task" : "tasks"}
+                </span>
+              </div>
+
+              {tasks.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center">
+                  <div className="text-4xl">📚</div>
+
+                  <h4 className="mt-4 font-bold">No schoolwork yet</h4>
+
+                  <p className="mt-2 text-sm text-slate-500">
+                    Add an assignment or announcement to get started.
                   </p>
 
-                  <div className="mt-5 grid grid-cols-7 gap-2">
-                    {weekView.map((day) => {
-                      const percent = Math.min(100, Math.round((day.minutes / capacity) * 100));
-                      const over = day.minutes > capacity;
-
-                      return (
-                        <div key={day.key} className="flex flex-col items-center gap-2">
-                          <div className="flex h-28 w-full items-end overflow-hidden rounded-lg bg-slate-100">
-                            <div
-                              className={`w-full transition-all ${over ? "bg-red-400" : "bg-indigo-500"}`}
-                              style={{ height: `${percent}%` }}
-                            />
-                          </div>
-                          <p className="text-xs font-semibold text-slate-600">{day.label}</p>
-                          <p className="text-[11px] text-slate-400">{day.minutes} min</p>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-        </section>
-
-
-        {/* ==================================================
-            TASKS
-        ================================================== */}
-
-        <section id="tasks" className="mt-12 scroll-mt-28">
-          <div className="mb-5 flex items-center justify-between">
-            <div>
-              <h3 className="text-2xl font-bold">Your schoolwork</h3>
-              <p className="mt-1 text-sm text-slate-500">
-                Everything in one place.
-              </p>
-            </div>
-
-            <span className="rounded-full bg-white px-3 py-1.5 text-sm font-medium text-slate-500 shadow-sm ring-1 ring-slate-200">
-              {tasks.length} {tasks.length === 1 ? "task" : "tasks"}
-            </span>
-          </div>
-
-          {tasks.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center">
-              <div className="text-4xl">📚</div>
-
-              <h4 className="mt-4 font-bold">No schoolwork yet</h4>
-
-              <p className="mt-2 text-sm text-slate-500">
-                Add an assignment or announcement to get started.
-              </p>
-
-              <button
-                onClick={() => setShowInput(true)}
-                className="mt-5 rounded-xl bg-indigo-600 px-5 py-3 font-semibold text-white hover:bg-indigo-700"
-              >
-                Add schoolwork
-              </button>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {sortedTasks.map((task) => (
-                <TaskCard
-                  key={task.id}
-                  task={task}
-                  overdue={
-                    !task.completed &&
-                    !!task.scheduledDate &&
-                    !!todayKey &&
-                    task.scheduledDate < todayKey
-                  }
-                  onToggle={() => toggleTask(task.id)}
-                  onRemove={() => removeTask(task.id)}
-                />
-              ))}
-            </div>
-          )}
-        </section>
-
-        {/* ==================================================
-            CALENDAR
-        ================================================== */}
-
-        <section
-          id="calendar"
-          className="mt-12 scroll-mt-28 rounded-2xl border border-slate-200 bg-white shadow-sm"
-        >
-          <div className="border-b border-slate-200 p-5 sm:p-6">
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <p className="text-xs font-bold uppercase tracking-widest text-indigo-600">
-                  Your schedule
-                </p>
-
-                <h3 className="mt-1 text-2xl font-bold">{monthName}</h3>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={todayMonth}
-                  className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold hover:bg-slate-50"
-                >
-                  Today
-                </button>
-
-                <button
-                  onClick={previousMonth}
-                  aria-label="Previous month"
-                  className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 text-lg hover:bg-slate-50"
-                >
-                  ←
-                </button>
-
-                <button
-                  onClick={nextMonth}
-                  aria-label="Next month"
-                  className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 text-lg hover:bg-slate-50"
-                >
-                  →
-                </button>
-              </div>
-            </div>
-          </div>
-
-          <div className="p-3 sm:p-5">
-            {/* WEEKDAYS */}
-
-            <div className="grid grid-cols-7 border-b border-slate-100 pb-2">
-              {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((day) => (
-                <div
-                  key={day}
-                  className="py-2 text-center text-xs font-bold uppercase tracking-wide text-slate-400"
-                >
-                  {day}
-                </div>
-              ))}
-            </div>
-
-            {/* DAYS */}
-
-            <div className="grid grid-cols-7">
-              {calendarDays.map((date) => {
-                const dateKey = formatDate(date);
-
-                const isCurrentMonth =
-                  date.getMonth() === calendarMonth.getMonth() &&
-                  date.getFullYear() === calendarMonth.getFullYear();
-
-                const isToday = dateKey === todayKey;
-                const dayTasks = tasksByDate[dateKey] || [];
-
-                return (
-                  <div
-                    key={dateKey}
-                    className={`min-h-28 min-w-0 border-b border-r border-slate-100 p-1.5 sm:min-h-32 sm:p-2 ${
-                      isCurrentMonth ? "bg-white" : "bg-slate-50/60"
-                    }`}
+                  <button
+                    onClick={() => setShowInput(true)}
+                    className="mt-5 rounded-xl bg-indigo-600 px-5 py-3 font-semibold text-white hover:bg-indigo-700"
                   >
-                    <div
-                      className={`mb-1 flex h-7 w-7 items-center justify-center rounded-full text-xs font-semibold ${
-                        isToday
-                          ? "bg-indigo-600 text-white"
-                          : isCurrentMonth
-                          ? "text-slate-700"
-                          : "text-slate-300"
-                      }`}
+                    Add schoolwork
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {sortedTasks.map((task) => (
+                    <TaskCard
+                      key={task.id}
+                      task={task}
+                      overdue={
+                        !task.completed &&
+                        !!task.scheduledDate &&
+                        !!todayKey &&
+                        task.scheduledDate < todayKey
+                      }
+                      onToggle={() => toggleTask(task.id)}
+                      onRemove={() => removeTask(task.id)}
+                    />
+                  ))}
+                </div>
+              )}
+            </section>
+
+            {/* ==================================================
+                CALENDAR
+            ================================================== */}
+
+            <section
+              id="calendar"
+              className="mt-12 scroll-mt-28 rounded-2xl border border-slate-200 bg-white shadow-sm"
+            >
+              <div className="border-b border-slate-200 p-5 sm:p-6">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="text-xs font-bold uppercase tracking-widest text-indigo-600">
+                      Your schedule
+                    </p>
+
+                    <h3 className="mt-1 text-2xl font-bold">{monthName}</h3>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={todayMonth}
+                      className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold hover:bg-slate-50"
                     >
-                      {date.getDate()}
-                    </div>
-
-                    <div className="space-y-1">
-                      {dayTasks.map((task) => (
-                        <button
-                          key={task.id}
-                          onClick={() => toggleTask(task.id)}
-                          title={`${task.title} — click to ${
-                            task.completed ? "mark incomplete" : "mark complete"
-                          }`}
-                          className={`w-full break-words rounded-lg p-1.5 text-left text-[10px] font-semibold transition sm:text-xs ${
-                            task.completed
-                              ? "bg-slate-100 text-slate-400 line-through"
-                              : task.priority === "High"
-                              ? "bg-red-50 text-red-700 hover:bg-red-100"
-                              : task.priority === "Medium"
-                              ? "bg-amber-50 text-amber-700 hover:bg-amber-100"
-                              : "bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
-                          }`}
-                        >
-                          {task.title}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* UNSCHEDULED */}
-
-          {unscheduledTasks.length > 0 && (
-            <div className="border-t border-slate-200 p-5">
-              <h4 className="font-bold text-slate-800">📌 Unscheduled tasks</h4>
-
-              <p className="mt-1 text-sm text-slate-500">
-                These tasks don&apos;t have a recognizable calendar date yet.
-              </p>
-
-              <div className="mt-3 space-y-2">
-                {unscheduledTasks.map((task) => (
-                  <div
-                    key={task.id}
-                    className="flex items-center justify-between rounded-xl bg-slate-50 p-3"
-                  >
-                    <div>
-                      <p className="text-sm font-semibold">{task.title}</p>
-
-                      <p className="text-xs text-slate-400">
-                        {task.subject} • Due {task.due}
-                      </p>
-                    </div>
+                      Today
+                    </button>
 
                     <button
-                      onClick={() => toggleTask(task.id)}
-                      className="rounded-full bg-white px-3 py-1.5 text-xs font-bold shadow-sm ring-1 ring-slate-200"
+                      onClick={previousMonth}
+                      aria-label="Previous month"
+                      className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 text-lg hover:bg-slate-50"
                     >
-                      {task.completed ? "Done" : "Mark done"}
+                      ←
+                    </button>
+
+                    <button
+                      onClick={nextMonth}
+                      aria-label="Next month"
+                      className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 text-lg hover:bg-slate-50"
+                    >
+                      →
                     </button>
                   </div>
-                ))}
+                </div>
               </div>
-            </div>
-          )}
-        </section>
 
+              <div className="p-3 sm:p-5">
+                {/* WEEKDAYS */}
+
+                <div className="grid grid-cols-7 border-b border-slate-100 pb-2">
+                  {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((day) => (
+                    <div
+                      key={day}
+                      className="py-2 text-center text-xs font-bold uppercase tracking-wide text-slate-400"
+                    >
+                      {day}
+                    </div>
+                  ))}
+                </div>
+
+                {/* DAYS */}
+
+                <div className="grid grid-cols-7">
+                  {calendarDays.map((date) => {
+                    const dateKey = formatDate(date);
+
+                    const isCurrentMonth =
+                      date.getMonth() === calendarMonth.getMonth() &&
+                      date.getFullYear() === calendarMonth.getFullYear();
+
+                    const isToday = dateKey === todayKey;
+                    const dayTasks = tasksByDate[dateKey] || [];
+
+                    return (
+                      <div
+                        key={dateKey}
+                        className={`min-h-28 min-w-0 border-b border-r border-slate-100 p-1.5 sm:min-h-32 sm:p-2 ${
+                          isCurrentMonth ? "bg-white" : "bg-slate-50/60"
+                        }`}
+                      >
+                        <div
+                          className={`mb-1 flex h-7 w-7 items-center justify-center rounded-full text-xs font-semibold ${
+                            isToday
+                              ? "bg-indigo-600 text-white"
+                              : isCurrentMonth
+                              ? "text-slate-700"
+                              : "text-slate-300"
+                          }`}
+                        >
+                          {date.getDate()}
+                        </div>
+
+                        <div className="space-y-1">
+                          {dayTasks.map((task) => (
+                            <button
+                              key={task.id}
+                              onClick={() => toggleTask(task.id)}
+                              title={`${task.title} — click to ${
+                                task.completed ? "mark incomplete" : "mark complete"
+                              }`}
+                              className={`w-full break-words rounded-lg p-1.5 text-left text-[10px] font-semibold transition sm:text-xs ${
+                                task.completed
+                                  ? "bg-slate-100 text-slate-400 line-through"
+                                  : task.priority === "High"
+                                  ? "bg-red-50 text-red-700 hover:bg-red-100"
+                                  : task.priority === "Medium"
+                                  ? "bg-amber-50 text-amber-700 hover:bg-amber-100"
+                                  : "bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                              }`}
+                            >
+                              {task.title}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* UNSCHEDULED */}
+
+              {unscheduledTasks.length > 0 && (
+                <div className="border-t border-slate-200 p-5">
+                  <h4 className="font-bold text-slate-800">📌 Unscheduled tasks</h4>
+
+                  <p className="mt-1 text-sm text-slate-500">
+                    These tasks don&apos;t have a recognizable calendar date yet.
+                  </p>
+
+                  <div className="mt-3 space-y-2">
+                    {unscheduledTasks.map((task) => (
+                      <div
+                        key={task.id}
+                        className="flex items-center justify-between rounded-xl bg-slate-50 p-3"
+                      >
+                        <div>
+                          <p className="text-sm font-semibold">{task.title}</p>
+
+                          <p className="text-xs text-slate-400">
+                            {task.subject} • Due {task.due}
+                          </p>
+                        </div>
+
+                        <button
+                          onClick={() => toggleTask(task.id)}
+                          className="rounded-full bg-white px-3 py-1.5 text-xs font-bold shadow-sm ring-1 ring-slate-200"
+                        >
+                          {task.completed ? "Done" : "Mark done"}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </section>
+
+            {/* ==================================================
+                AI CALLOUT
+            ================================================== */}
+
+            <section className="mt-10 overflow-hidden rounded-2xl border border-indigo-100 bg-indigo-50 p-6 sm:p-8">
+              <div className="flex flex-col justify-between gap-6 md:flex-row md:items-center">
+                <div>
+                  <div className="mb-3 inline-flex rounded-full bg-white px-3 py-1 text-xs font-bold text-indigo-600 shadow-sm">
+                    ✨ NOVUS AI
+                  </div>
+
+                  <h3 className="text-2xl font-bold text-slate-950">
+                    Stop organizing. Start learning.
+                  </h3>
+
+                  <p className="mt-2 max-w-2xl text-slate-600">
+                    Paste your messy school information and let Novus turn it
+                    into a clear plan you can actually follow.
+                  </p>
+                </div>
+
+                <button
+                  onClick={() => {
+                    setShowInput(true);
+                    goTo("dashboard");
+                  }}
+                  className="shrink-0 rounded-xl bg-indigo-600 px-5 py-3 font-semibold text-white transition hover:bg-indigo-700"
+                >
+                  Try Novus →
+                </button>
+              </div>
+            </section>
           </>
         )}
 
@@ -1803,108 +1914,73 @@ History presentation due Monday.`}
             SPENDING ANALYSIS
         ================================================== */}
         {activeView === "spending" && (
-        <section id="spending" className="scroll-mt-28">
-          <div className="mb-6 flex flex-col justify-between gap-3 sm:flex-row sm:items-end">
-            <div>
-              <p className="text-xs font-bold uppercase tracking-widest text-emerald-600">Personal finance</p>
-              <h2 className="mt-1 text-3xl font-bold">Spending tracker</h2>
-              <p className="mt-2 text-slate-500">Record everyday expenses and understand where your money goes. Your entries stay in this browser.</p>
-            </div>
-          </div>
-          {(() => {
-            const monthKey = formatDate(new Date()).slice(0, 7);
-            const monthExpenses = expenses.filter((e) => e.date.startsWith(monthKey));
-            const spent = monthExpenses.reduce((sum, e) => sum + e.amount, 0);
-            const remaining = monthlyBudget - spent;
-            const categoryTotals = EXPENSE_CATEGORIES.map((category) => ({ category, total: monthExpenses.filter((e) => e.category === category).reduce((sum, e) => sum + e.amount, 0) })).sort((a, b) => b.total - a.total);
-            const maxCategory = Math.max(1, ...categoryTotals.map((c) => c.total));
-            const activeCategories = categoryTotals.filter((c) => c.total > 0);
-            const pieColors = ["#10b981", "#6366f1", "#f59e0b", "#ec4899", "#06b6d4", "#8b5cf6"];
-            let pieOffset = 0;
-            const pieStops = activeCategories.map((c, i) => { const pct = spent ? (c.total / spent) * 100 : 0; const start = pieOffset; pieOffset += pct; return `${pieColors[i % pieColors.length]} ${start}% ${pieOffset}%`; });
-            const sixMonthTrend = Array.from({ length: 6 }, (_, i) => { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - (5 - i)); const key = formatDate(d).slice(0, 7); return { key, label: d.toLocaleDateString("en-IN", { month: "short" }), total: expenses.filter((e) => e.date.startsWith(key)).reduce((sum, e) => sum + e.amount, 0) }; });
-            const trendMax = Math.max(1, ...sixMonthTrend.map((m) => m.total));
-            const savingTips = (() => { const tips: string[] = []; if (monthlyBudget > 0 && spent > monthlyBudget) tips.push(`You are ₹${(spent-monthlyBudget).toLocaleString("en-IN", {maximumFractionDigits:0})} over budget. Pause non-essential purchases and set a daily spending limit for the rest of the month.`); else if (monthlyBudget > 0 && spent / monthlyBudget >= .8) tips.push(`You've used ${Math.round(spent/monthlyBudget*100)}% of your budget. Keep the remaining ₹${Math.max(0,remaining).toLocaleString("en-IN", {maximumFractionDigits:0})} for essentials.`); else if (monthlyBudget > 0) tips.push(`You're within budget. Try moving 10–20% of the remaining ₹${Math.max(0,remaining).toLocaleString("en-IN", {maximumFractionDigits:0})} into savings.`); else tips.push("Set a monthly budget to get clearer saving targets and spending alerts."); const top = activeCategories[0]; if (top) tips.push(`${top.category} is your biggest category at ₹${top.total.toLocaleString("en-IN", {maximumFractionDigits:0})}${spent ? ` (${Math.round(top.total/spent*100)}% of spending)` : ""}. Review this category for a realistic cut.`); const shopping = categoryTotals.find(c=>c.category==="Shopping")?.total||0; const entertainment = categoryTotals.find(c=>c.category==="Entertainment")?.total||0; if (shopping+entertainment>0) tips.push(`A 15% reduction in Shopping and Entertainment could free up about ₹${Math.round((shopping+entertainment)*.15).toLocaleString("en-IN")} this month.`); tips.push("Before buying something non-essential, wait 24 hours and compare prices or alternatives."); return tips; })();
-            return (
-              <>
-                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                  <div className="rounded-2xl bg-slate-950 p-5 text-white"><p className="text-sm text-slate-400">Spent this month</p><p className="mt-2 text-3xl font-bold">₹{spent.toLocaleString("en-IN", { maximumFractionDigits: 2 })}</p></div>
-                  <div className="rounded-2xl border bg-white p-5"><p className="text-sm text-slate-500">Monthly budget</p><p className="mt-2 text-3xl font-bold">₹{monthlyBudget.toLocaleString("en-IN")}</p></div>
-                  <div className="rounded-2xl border bg-white p-5"><p className="text-sm text-slate-500">Budget remaining</p><p className={`mt-2 text-3xl font-bold ${remaining < 0 ? "text-red-600" : "text-emerald-600"}`}>{monthlyBudget ? `₹${remaining.toLocaleString("en-IN", { maximumFractionDigits: 2 })}` : "—"}</p>{monthlyBudget > 0 && <p className="mt-1 text-xs text-slate-400">{remaining < 0 ? "Over budget" : "Available"}</p>}</div>
-                  <div className="rounded-2xl border bg-white p-5"><p className="text-sm text-slate-500">Transactions this month</p><p className="mt-2 text-3xl font-bold">{monthExpenses.length}</p></div>
-                </div>
-                <div className="mt-5 grid gap-5 lg:grid-cols-2">
-                  <div className="rounded-2xl border bg-white p-6 shadow-sm">
-                    <h3 className="text-xl font-bold">Add expense</h3>
-                    <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                      <input value={expenseTitle} onChange={(e) => setExpenseTitle(e.target.value)} placeholder="Description (e.g. lunch)" className="rounded-xl border p-3 text-sm outline-none focus:border-emerald-400 sm:col-span-2" />
-                      <input type="number" min="0.01" step="0.01" value={expenseAmount} onChange={(e) => setExpenseAmount(e.target.value)} placeholder="Amount (₹)" className="rounded-xl border p-3 text-sm outline-none focus:border-emerald-400" />
-                      <select value={expenseCategory} onChange={(e) => setExpenseCategory(e.target.value)} className="rounded-xl border p-3 text-sm">{EXPENSE_CATEGORIES.map((c) => <option key={c}>{c}</option>)}</select>
-                      <input type="date" value={expenseDate} onChange={(e) => setExpenseDate(e.target.value)} className="rounded-xl border p-3 text-sm sm:col-span-2" />
-                    </div>
-                    <button onClick={addExpense} className="mt-4 rounded-xl bg-emerald-600 px-5 py-3 font-semibold text-white hover:bg-emerald-700">+ Add transaction</button>
-                    {expenseNotice && <p role="status" className="mt-3 text-sm text-slate-500">{expenseNotice}</p>}
-                    <div className="mt-6 border-t pt-5"><label className="text-sm font-semibold">Monthly budget (₹)</label><input type="number" min="0" value={monthlyBudget || ""} onChange={(e) => setMonthlyBudget(Math.max(0, Number(e.target.value) || 0))} placeholder="Set your monthly budget" className="mt-2 w-full rounded-xl border p-3 text-sm" /></div>
-                  </div>
-                  <div className="rounded-2xl border bg-white p-6 shadow-sm">
-                    <h3 className="text-xl font-bold">Category breakdown</h3><p className="mt-1 text-sm text-slate-500">Current month</p>
-                    <div className="mt-5 space-y-4">{categoryTotals.map(({category,total}) => <div key={category}><div className="mb-1 flex justify-between text-sm"><span>{category}</span><span className="font-semibold">₹{total.toLocaleString("en-IN", {maximumFractionDigits:2})}</span></div><div className="h-2 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-emerald-500" style={{width: `${(total/maxCategory)*100}%`}} /></div></div>)}</div>
-                  </div>
-                </div>
-                <div className="mt-5 grid gap-5 lg:grid-cols-2">
-                  <div className="rounded-2xl border bg-white p-6 shadow-sm"><h3 className="text-xl font-bold">Spending distribution</h3><p className="mt-1 text-sm text-slate-500">Visual share by category for this month</p><div className="mt-5 flex flex-col items-center gap-5 sm:flex-row"><div className="relative h-44 w-44 shrink-0 rounded-full" style={{background: spent > 0 ? `conic-gradient(${pieStops.join(",")})` : "conic-gradient(#e2e8f0 0% 100%)"}}><div className="absolute inset-5 flex flex-col items-center justify-center rounded-full bg-white"><span className="text-xs text-slate-500">Total spent</span><strong className="text-lg">₹{spent.toLocaleString("en-IN", {maximumFractionDigits:0})}</strong></div></div><div className="w-full space-y-2">{activeCategories.length ? activeCategories.map((c,i)=><div key={c.category} className="flex items-center justify-between gap-3 text-sm"><span className="flex items-center gap-2"><span className="h-3 w-3 rounded-full" style={{backgroundColor:pieColors[i%pieColors.length]}}/>{c.category}</span><span className="font-semibold">{spent?Math.round(c.total/spent*100):0}% · ₹{c.total.toLocaleString("en-IN",{maximumFractionDigits:0})}</span></div>) : <p className="text-sm text-slate-500">Add expenses to see the chart.</p>}</div></div></div>
-                  <div className="rounded-2xl border bg-white p-6 shadow-sm"><h3 className="text-xl font-bold">6-month spending trend</h3><p className="mt-1 text-sm text-slate-500">Monthly totals, including the current month</p><div className="mt-5 flex h-44 items-end gap-2">{sixMonthTrend.map((m,i)=><div key={m.key} className="flex h-full flex-1 flex-col justify-end"><div className="mb-1 text-center text-[10px] text-slate-500">{m.total?`₹${Math.round(m.total/1000*10)/10}k`:"—"}</div><div className="w-full rounded-t-md bg-emerald-500" style={{height:`${m.total?Math.max(4,(m.total/trendMax)*75):2}%`,opacity:m.key===monthKey?1:.65}}/><div className="mt-2 text-center text-xs text-slate-500">{m.label}</div></div>)}</div></div>
-                </div>
-                <div className="mt-5 rounded-2xl border bg-amber-50/60 p-6"><h3 className="text-xl font-bold">Smart saving suggestions</h3><p className="mt-1 text-sm text-slate-600">Simple ideas based on your actual spending.</p><ul className="mt-4 space-y-3">{savingTips.map((tip,i)=><li key={i} className="flex gap-3 text-sm leading-relaxed"><span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-amber-100 font-semibold text-amber-700">{i+1}</span><span>{tip}</span></li>)}</ul></div>
-                <div className="mt-5 rounded-2xl border border-emerald-200 bg-emerald-50/50 p-6"><div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-xl font-bold">AI spending coach</h3><p className="mt-1 text-sm text-slate-600">Insights from this month’s expenses and budget.</p></div><button disabled={spendingAiLoading} onClick={async()=>{setSpendingAiLoading(true);setSpendingAi("");try{const res=await fetch("/api/organise",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"spending",data:{budget:monthlyBudget,month:monthKey,expenses:monthExpenses,spent,remaining,categoryTotals}})});const data=await res.json();if(!res.ok)throw new Error(data.error||"Request failed");setSpendingAi(data.result||"No analysis returned.");}catch(e:any){setSpendingAi(e.message||"Could not get insights.");}finally{setSpendingAiLoading(false);}}} className="rounded-xl bg-emerald-700 px-4 py-3 font-semibold text-white disabled:opacity-50">{spendingAiLoading?"Analyzing…":"Analyze my spending"}</button></div>{spendingAi&&<div className="mt-4 whitespace-pre-wrap rounded-xl bg-white p-4 text-sm leading-relaxed">{spendingAi}</div>}</div>
-                <div className="mt-5 rounded-2xl border bg-white p-6 shadow-sm">
-                  <div className="flex items-center justify-between"><h3 className="text-xl font-bold">Transaction history</h3><span className="text-sm text-slate-500">{expenses.length} total</span></div>
-                  {expenses.length === 0 ? <p className="mt-4 text-sm text-slate-500">No expenses recorded yet. Add your first transaction above.</p> : <div className="mt-4 divide-y">{expenses.slice().sort((a,b)=>b.date.localeCompare(a.date)).map((expense) => <div key={expense.id} className="flex items-center justify-between gap-3 py-3"><div className="min-w-0"><p className="truncate font-semibold">{expense.title}</p><p className="text-xs text-slate-500">{expense.category} · {expense.date}</p></div><div className="flex items-center gap-3"><span className="font-semibold">−₹{expense.amount.toLocaleString("en-IN", {maximumFractionDigits:2})}</span><button onClick={()=>setExpenses((current)=>current.filter((e)=>e.id!==expense.id))} aria-label={`Delete ${expense.title}`} className="rounded-lg px-2 py-1 text-slate-400 hover:bg-red-50 hover:text-red-500">✕</button></div></div>)}</div>}
-                </div>
-              </>
-            );
-          })()}
-        </section>
-        )}
-
-        {activeView === "dashboard" && (
-          <>
-        {/* ==================================================
-            AI CALLOUT
-        ================================================== */}
-
-        <section className="mt-10 overflow-hidden rounded-2xl border border-indigo-100 bg-indigo-50 p-6 sm:p-8">
-          <div className="flex flex-col justify-between gap-6 md:flex-row md:items-center">
-            <div>
-              <div className="mb-3 inline-flex rounded-full bg-white px-3 py-1 text-xs font-bold text-indigo-600 shadow-sm">
-                ✨ NOVUS AI
+          <section id="spending" className="scroll-mt-28">
+            <div className="mb-6 flex flex-col justify-between gap-3 sm:flex-row sm:items-end">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-widest text-emerald-600">Personal finance</p>
+                <h2 className="mt-1 text-3xl font-bold">Spending tracker</h2>
+                <p className="mt-2 text-slate-500">Record everyday expenses and understand where your money goes. Your entries stay in this browser.</p>
               </div>
-
-              <h3 className="text-2xl font-bold text-slate-950">
-                Stop organizing. Start learning.
-              </h3>
-
-              <p className="mt-2 max-w-2xl text-slate-600">
-                Paste your messy school information and let Novus turn it
-                into a clear plan you can actually follow.
-              </p>
             </div>
-
-            <button
-              onClick={() => {
-                setShowInput(true);
-                goTo("dashboard");
-              }}
-              className="shrink-0 rounded-xl bg-indigo-600 px-5 py-3 font-semibold text-white transition hover:bg-indigo-700"
-            >
-              Try Novus →
-            </button>
-          </div>
-        </section>
-          </>
+            {(() => {
+              const monthKey = formatDate(new Date()).slice(0, 7);
+              const monthExpenses = expenses.filter((e) => e.date.startsWith(monthKey));
+              const spent = monthExpenses.reduce((sum, e) => sum + e.amount, 0);
+              const remaining = monthlyBudget - spent;
+              const categoryTotals = EXPENSE_CATEGORIES.map((category) => ({ category, total: monthExpenses.filter((e) => e.category === category).reduce((sum, e) => sum + e.amount, 0) })).sort((a, b) => b.total - a.total);
+              const maxCategory = Math.max(1, ...categoryTotals.map((c) => c.total));
+              const activeCategories = categoryTotals.filter((c) => c.total > 0);
+              const pieColors = ["#10b981", "#6366f1", "#f59e0b", "#ec4899", "#06b6d4", "#8b5cf6"];
+              let pieOffset = 0;
+              const pieStops = activeCategories.map((c, i) => { const pct = spent ? (c.total / spent) * 100 : 0; const start = pieOffset; pieOffset += pct; return `${pieColors[i % pieColors.length]} ${start}% ${pieOffset}%`; });
+              const sixMonthTrend = Array.from({ length: 6 }, (_, i) => { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - (5 - i)); const key = formatDate(d).slice(0, 7); return { key, label: d.toLocaleDateString("en-IN", { month: "short" }), total: expenses.filter((e) => e.date.startsWith(key)).reduce((sum, e) => sum + e.amount, 0) }; });
+              const trendMax = Math.max(1, ...sixMonthTrend.map((m) => m.total));
+              const savingTips = (() => { const tips: string[] = []; if (monthlyBudget > 0 && spent > monthlyBudget) tips.push(`You are ₹${(spent-monthlyBudget).toLocaleString("en-IN", {maximumFractionDigits:0})} over budget. Pause non-essential purchases and set a daily spending limit for the rest of the month.`); else if (monthlyBudget > 0 && spent / monthlyBudget >= .8) tips.push(`You've used ${Math.round(spent/monthlyBudget*100)}% of your budget. Keep the remaining ₹${Math.max(0,remaining).toLocaleString("en-IN", {maximumFractionDigits:0})} for essentials.`); else if (monthlyBudget > 0) tips.push(`You're within budget. Try moving 10–20% of the remaining ₹${Math.max(0,remaining).toLocaleString("en-IN", {maximumFractionDigits:0})} into savings.`); else tips.push("Set a monthly budget to get clearer saving targets and spending alerts."); const top = activeCategories[0]; if (top) tips.push(`${top.category} is your biggest category at ₹${top.total.toLocaleString("en-IN", {maximumFractionDigits:0})}${spent ? ` (${Math.round(top.total/spent*100)}% of spending)` : ""}. Review this category for a realistic cut.`); const shopping = categoryTotals.find(c=>c.category==="Shopping")?.total||0; const entertainment = categoryTotals.find(c=>c.category==="Entertainment")?.total||0; if (shopping+entertainment>0) tips.push(`A 15% reduction in Shopping and Entertainment could free up about ₹${Math.round((shopping+entertainment)*.15).toLocaleString("en-IN")} this month.`); tips.push("Before buying something non-essential, wait 24 hours and compare prices or alternatives."); return tips; })();
+              return (
+                <>
+                  <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                    <div className="rounded-2xl bg-slate-950 p-5 text-white"><p className="text-sm text-slate-400">Spent this month</p><p className="mt-2 text-3xl font-bold">₹{spent.toLocaleString("en-IN", { maximumFractionDigits: 2 })}</p></div>
+                    <div className="rounded-2xl border bg-white p-5"><p className="text-sm text-slate-500">Monthly budget</p><p className="mt-2 text-3xl font-bold">₹{monthlyBudget.toLocaleString("en-IN")}</p></div>
+                    <div className="rounded-2xl border bg-white p-5"><p className="text-sm text-slate-500">Budget remaining</p><p className={`mt-2 text-3xl font-bold ${remaining < 0 ? "text-red-600" : "text-emerald-600"}`}>{monthlyBudget ? `₹${remaining.toLocaleString("en-IN", { maximumFractionDigits: 2 })}` : "—"}</p>{monthlyBudget > 0 && <p className="mt-1 text-xs text-slate-400">{remaining < 0 ? "Over budget" : "Available"}</p>}</div>
+                    <div className="rounded-2xl border bg-white p-5"><p className="text-sm text-slate-500">Transactions this month</p><p className="mt-2 text-3xl font-bold">{monthExpenses.length}</p></div>
+                  </div>
+                  <div className="mt-5 grid gap-5 lg:grid-cols-2">
+                    <div className="rounded-2xl border bg-white p-6 shadow-sm">
+                      <h3 className="text-xl font-bold">Add expense</h3>
+                      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                        <input value={expenseTitle} onChange={(e) => setExpenseTitle(e.target.value)} placeholder="Description (e.g. lunch)" className="rounded-xl border p-3 text-sm outline-none focus:border-emerald-400 sm:col-span-2" />
+                        <input type="number" min="0.01" step="0.01" value={expenseAmount} onChange={(e) => setExpenseAmount(e.target.value)} placeholder="Amount (₹)" className="rounded-xl border p-3 text-sm outline-none focus:border-emerald-400" />
+                        <select value={expenseCategory} onChange={(e) => setExpenseCategory(e.target.value)} className="rounded-xl border p-3 text-sm">{EXPENSE_CATEGORIES.map((c) => <option key={c}>{c}</option>)}</select>
+                        <input type="date" value={expenseDate} onChange={(e) => setExpenseDate(e.target.value)} className="rounded-xl border p-3 text-sm sm:col-span-2" />
+                      </div>
+                      <button onClick={addExpense} className="mt-4 rounded-xl bg-emerald-600 px-5 py-3 font-semibold text-white hover:bg-emerald-700">+ Add transaction</button>
+                      {expenseNotice && <p role="status" className="mt-3 text-sm text-slate-500">{expenseNotice}</p>}
+                      <div className="mt-6 border-t pt-5"><label className="text-sm font-semibold">Monthly budget (₹)</label><input type="number" min="0" value={monthlyBudget || ""} onChange={(e) => setMonthlyBudget(Math.max(0, Number(e.target.value) || 0))} placeholder="Set your monthly budget" className="mt-2 w-full rounded-xl border p-3 text-sm" /></div>
+                    </div>
+                    <div className="rounded-2xl border bg-white p-6 shadow-sm">
+                      <h3 className="text-xl font-bold">Category breakdown</h3><p className="mt-1 text-sm text-slate-500">Current month</p>
+                      <div className="mt-5 space-y-4">{categoryTotals.map(({category,total}) => <div key={category}><div className="mb-1 flex justify-between text-sm"><span>{category}</span><span className="font-semibold">₹{total.toLocaleString("en-IN", {maximumFractionDigits:2})}</span></div><div className="h-2 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-emerald-500" style={{width: `${(total/maxCategory)*100}%`}} /></div></div>)}</div>
+                    </div>
+                  </div>
+                  <div className="mt-5 grid gap-5 lg:grid-cols-2">
+                    <div className="rounded-2xl border bg-white p-6 shadow-sm"><h3 className="text-xl font-bold">Spending distribution</h3><p className="mt-1 text-sm text-slate-500">Visual share by category for this month</p><div className="mt-5 flex flex-col items-center gap-5 sm:flex-row"><div className="relative h-44 w-44 shrink-0 rounded-full" style={{background: spent > 0 ? `conic-gradient(${pieStops.join(",")})` : "conic-gradient(#e2e8f0 0% 100%)"}}><div className="absolute inset-5 flex flex-col items-center justify-center rounded-full bg-white"><span className="text-xs text-slate-500">Total spent</span><strong className="text-lg">₹{spent.toLocaleString("en-IN", {maximumFractionDigits:0})}</strong></div></div><div className="w-full space-y-2">{activeCategories.length ? activeCategories.map((c,i)=><div key={c.category} className="flex items-center justify-between gap-3 text-sm"><span className="flex items-center gap-2"><span className="h-3 w-3 rounded-full" style={{backgroundColor:pieColors[i%pieColors.length]}}/>{c.category}</span><span className="font-semibold">{spent?Math.round(c.total/spent*100):0}% · ₹{c.total.toLocaleString("en-IN",{maximumFractionDigits:0})}</span></div>) : <p className="text-sm text-slate-500">Add expenses to see the chart.</p>}</div></div></div>
+                    <div className="rounded-2xl border bg-white p-6 shadow-sm"><h3 className="text-xl font-bold">6-month spending trend</h3><p className="mt-1 text-sm text-slate-500">Monthly totals, including the current month</p><div className="mt-5 flex h-44 items-end gap-2">{sixMonthTrend.map((m)=><div key={m.key} className="flex h-full flex-1 flex-col justify-end"><div className="mb-1 text-center text-[10px] text-slate-500">{m.total?`₹${Math.round(m.total/1000*10)/10}k`:"—"}</div><div className="w-full rounded-t-md bg-emerald-500" style={{height:`${m.total?Math.max(4,(m.total/trendMax)*75):2}%`,opacity:m.key===monthKey?1:.65}}/><div className="mt-2 text-center text-xs text-slate-500">{m.label}</div></div>)}</div></div>
+                  </div>
+                  <div className="mt-5 rounded-2xl border bg-amber-50/60 p-6"><h3 className="text-xl font-bold">Smart saving suggestions</h3><p className="mt-1 text-sm text-slate-600">Simple ideas based on your actual spending.</p><ul className="mt-4 space-y-3">{savingTips.map((tip,i)=><li key={i} className="flex gap-3 text-sm leading-relaxed"><span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-amber-100 font-semibold text-amber-700">{i+1}</span><span>{tip}</span></li>)}</ul></div>
+                  <div className="mt-5 rounded-2xl border border-emerald-200 bg-emerald-50/50 p-6"><div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-xl font-bold">AI spending coach</h3><p className="mt-1 text-sm text-slate-600">Insights from this month’s expenses and budget.</p></div><button disabled={spendingAiLoading} onClick={async()=>{setSpendingAiLoading(true);setSpendingAi("");try{const res=await fetch("/api/organise",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"spending",data:{budget:monthlyBudget,month:monthKey,expenses:monthExpenses,spent,remaining,categoryTotals}})});const data=await res.json();if(!res.ok)throw new Error(data.error||"Request failed");setSpendingAi(data.result||"No analysis returned.");}catch(e:any){setSpendingAi(e.message||"Could not get insights.");}finally{setSpendingAiLoading(false);}}} className="rounded-xl bg-emerald-700 px-4 py-3 font-semibold text-white disabled:opacity-50">{spendingAiLoading?"Analyzing…":"Analyze my spending"}</button></div>{spendingAi&&<div className="mt-4 whitespace-pre-wrap rounded-xl bg-white p-4 text-sm leading-relaxed">{spendingAi}</div>}</div>
+                  <div className="mt-5 rounded-2xl border bg-white p-6 shadow-sm">
+                    <div className="flex items-center justify-between"><h3 className="text-xl font-bold">Transaction history</h3><span className="text-sm text-slate-500">{expenses.length} total</span></div>
+                    {expenses.length === 0 ? <p className="mt-4 text-sm text-slate-500">No expenses recorded yet. Add your first transaction above.</p> : <div className="mt-4 divide-y">{expenses.slice().sort((a,b)=>b.date.localeCompare(a.date)).map((expense) => <div key={expense.id} className="flex items-center justify-between gap-3 py-3"><div className="min-w-0"><p className="truncate font-semibold">{expense.title}</p><p className="text-xs text-slate-500">{expense.category} · {expense.date}</p></div><div className="flex items-center gap-3"><span className="font-semibold">−₹{expense.amount.toLocaleString("en-IN", {maximumFractionDigits:2})}</span><button onClick={()=>setExpenses((current)=>current.filter((e)=>e.id!==expense.id))} aria-label={`Delete ${expense.title}`} className="rounded-lg px-2 py-1 text-slate-400 hover:bg-red-50 hover:text-red-500">✕</button></div></div>)}</div>}
+                  </div>
+                </>
+              );
+            })()}
+          </section>
         )}
 
-
+        {/* ==================================================
+            FLASHCARDS
+        ================================================== */}
         {activeView === "flashcards" && (
           <section className="mx-auto max-w-5xl">
             <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
@@ -1929,17 +2005,377 @@ History presentation due Monday.`}
             <div className="mt-8 rounded-2xl border bg-white p-5"><h3 className="font-bold">How to use this deck</h3><p className="mt-2 text-sm leading-6 text-slate-500">Read the question, answer from memory, then reveal the card. Filter by topic to focus on a module or concept. These cards are built from the two uploaded AI PDFs.</p></div>
           </section>
         )}
+
+        {/* ==================================================
+            VISUAL LAB
+        ================================================== */}
+        {activeView === "visuals" && <VisualLab />}
+
+        {/* ==================================================
+            MEETUP TAB
+        ================================================== */}
+        {activeView === "meetup" && <MeetupTab />}
+
         {/* FOOTER */}
 
         <footer className="py-10 text-center text-sm text-slate-400">
           Novus • A workspace for students.
         </footer>
       </div>
-        {activeView === "visuals" && <VisualLab />}
     </main>
   );
 }
 
+/* ==================================================
+   MEETUP TAB COMPONENT
+================================================== */
+
+function MeetupTab() {
+  const [people, setPeople] = useState<PersonPoint[]>([
+    { id: 1, name: "Person 1", query: "", lat: null, lon: null },
+    { id: 2, name: "Person 2", query: "", lat: null, lon: null },
+  ]);
+  const [result, setResult] = useState<MeetupResult | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const mapContainerRef = useRef<HTMLDivElement | null>(null);
+  const mapInstanceRef = useRef<any>(null);
+
+  function addPerson() {
+    const nextNum = people.length + 1;
+    setPeople((curr) => [
+      ...curr,
+      { id: Date.now() + nextNum, name: `Person ${nextNum}`, query: "", lat: null, lon: null },
+    ]);
+  }
+
+  function removePerson(id: number) {
+    if (people.length <= 2) return;
+    setPeople((curr) => curr.filter((p) => p.id !== id));
+    setResult(null);
+  }
+
+  function updatePerson(id: number, patch: Partial<PersonPoint>) {
+    setPeople((curr) =>
+      curr.map((p) =>
+        p.id === id
+          ? {
+              ...p,
+              ...patch,
+              ...(patch.query !== undefined ? { lat: null, lon: null, resolvedName: undefined } : {}),
+            }
+          : p
+      )
+    );
+  }
+
+  async function geocodePlace(
+    query: string
+  ): Promise<{ lat: number; lon: number; displayName: string }> {
+    const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(
+      query
+    )}`;
+    const res = await fetch(url, { headers: { Accept: "application/json" } });
+    if (!res.ok) throw new Error("Could not look up location right now.");
+    const data = await res.json();
+    if (!Array.isArray(data) || data.length === 0) {
+      throw new Error(`Location not found for "${query}". Try adding a city or landmark.`);
+    }
+    return {
+      lat: Number(data[0].lat),
+      lon: Number(data[0].lon),
+      displayName: String(data[0].display_name || query),
+    };
+  }
+
+  async function calculateMeetup() {
+    setError("");
+    const filled = people.filter((p) => p.query.trim().length > 0);
+    if (filled.length < 2) {
+      setError("Enter starting locations for at least 2 people.");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const resolved = await Promise.all(
+        filled.map(async (p) => {
+          const geo = await geocodePlace(p.query.trim());
+          return { ...p, lat: geo.lat, lon: geo.lon, resolvedName: geo.displayName };
+        })
+      );
+
+      setPeople((curr) =>
+        curr.map((p) => {
+          const match = resolved.find((r) => r.id === p.id);
+          return match ? match : p;
+        })
+      );
+
+      const best = computeBestMeetingPoint(
+        resolved.map((r) => ({ id: r.id, name: r.name, lat: r.lat, lon: r.lon }))
+      );
+
+      try {
+        const revRes = await fetch(
+          `https://nominatim.openstreetmap.org/reverse?format=json&lat=${best.lat}&lon=${best.lon}`
+        );
+        if (revRes.ok) {
+          const rev = await revRes.json();
+          if (rev?.display_name) {
+            best.placeLabel = String(rev.display_name).split(",").slice(0, 3).join(", ");
+          }
+        }
+      } catch {
+        // Ignore reverse geocode failure
+      }
+
+      setResult(best);
+    } catch (err: any) {
+      setError(err?.message || "Failed to calculate meeting point.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    const validPoints = people.filter((p) => p.lat !== null && p.lon !== null) as {
+      id: number;
+      name: string;
+      lat: number;
+      lon: number;
+      resolvedName?: string;
+    }[];
+
+    if (!mapContainerRef.current) return;
+
+    async function renderMap() {
+      const L = (window as any).L;
+      if (!L || !mapContainerRef.current) return;
+
+      if (!document.getElementById("leaflet-css")) {
+        const link = document.createElement("link");
+        link.id = "leaflet-css";
+        link.rel = "stylesheet";
+        link.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
+        document.head.appendChild(link);
+      }
+
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.remove();
+        mapInstanceRef.current = null;
+      }
+
+      const centerLat = result ? result.lat : validPoints[0]?.lat ?? 12.9716;
+      const centerLon = result ? result.lon : validPoints[0]?.lon ?? 77.5946;
+
+      const map = L.map(mapContainerRef.current).setView([centerLat, centerLon], 12);
+      mapInstanceRef.current = map;
+
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        attribution: "&copy; OpenStreetMap contributors",
+      }).addTo(map);
+
+      const latLngs: [number, number][] = [];
+
+      for (const p of validPoints) {
+        latLngs.push([p.lat, p.lon]);
+        L.marker([p.lat, p.lon])
+          .addTo(map)
+          .bindPopup(`<b>${p.name}</b><br/>${p.resolvedName || ""}`);
+
+        if (result) {
+          L.polyline(
+            [
+              [p.lat, p.lon],
+              [result.lat, result.lon],
+            ],
+            { color: "#4f46e5", weight: 2, dashArray: "5, 6" }
+          ).addTo(map);
+        }
+      }
+
+      if (result) {
+        latLngs.push([result.lat, result.lon]);
+        L.circleMarker([result.lat, result.lon], {
+          radius: 10,
+          color: "#059669",
+          fillColor: "#10b981",
+          fillOpacity: 0.9,
+        })
+          .addTo(map)
+          .bindPopup(`<b>Best Meeting Point</b><br/>Avg: ${result.avgKm.toFixed(1)} km`);
+      }
+
+      if (latLngs.length > 1) {
+        map.fitBounds(latLngs, { padding: [36, 36] });
+      }
+    }
+
+    if ((window as any).L) {
+      void renderMap();
+    } else {
+      const existingScript = document.getElementById("leaflet-js") as HTMLScriptElement | null;
+      if (existingScript) {
+        existingScript.addEventListener("load", () => void renderMap(), { once: true });
+      } else {
+        const script = document.createElement("script");
+        script.id = "leaflet-js";
+        script.src = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js";
+        script.async = true;
+        script.onload = () => void renderMap();
+        document.body.appendChild(script);
+      }
+    }
+
+    return () => {
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.remove();
+        mapInstanceRef.current = null;
+      }
+    };
+  }, [people, result]);
+
+  return (
+    <section id="meetup" className="scroll-mt-28 space-y-6">
+      <div>
+        <p className="text-xs font-bold uppercase tracking-widest text-indigo-600">
+          Location &amp; Distance
+        </p>
+        <h2 className="mt-1 text-3xl font-bold">Best meeting point</h2>
+        <p className="mt-2 text-slate-500">
+          Add 2 or more starting points to calculate the spot with the lowest common average distance.
+        </p>
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="flex items-center justify-between">
+            <h3 className="text-xl font-bold">Participants ({people.length})</h3>
+            <button
+              type="button"
+              onClick={addPerson}
+              className="rounded-xl border border-slate-200 px-3 py-1.5 text-sm font-semibold hover:bg-slate-50"
+            >
+              + Add person
+            </button>
+          </div>
+
+          <div className="mt-4 space-y-3">
+            {people.map((person, idx) => (
+              <div
+                key={person.id}
+                className="flex flex-col gap-2 rounded-xl bg-slate-50 p-3 sm:flex-row sm:items-center"
+              >
+                <input
+                  value={person.name}
+                  onChange={(e) => updatePerson(person.id, { name: e.target.value })}
+                  placeholder={`Person ${idx + 1}`}
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium sm:w-36"
+                />
+                <input
+                  value={person.query}
+                  onChange={(e) => updatePerson(person.id, { query: e.target.value })}
+                  placeholder="Area, neighborhood, or landmark"
+                  className="flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-indigo-400"
+                />
+                {people.length > 2 && (
+                  <button
+                    type="button"
+                    onClick={() => removePerson(person.id)}
+                    aria-label={`Remove ${person.name}`}
+                    className="rounded-lg px-2.5 py-2 text-sm text-slate-400 hover:bg-red-50 hover:text-red-500"
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+
+          {error && (
+            <div
+              role="alert"
+              className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
+            >
+              {error}
+            </div>
+          )}
+
+          <button
+            type="button"
+            onClick={calculateMeetup}
+            disabled={loading}
+            className="mt-5 w-full rounded-xl bg-indigo-600 px-5 py-3 font-semibold text-white transition hover:bg-indigo-700 disabled:opacity-50"
+          >
+            {loading ? "Calculating meeting point…" : "Calculate best meeting point"}
+          </button>
+        </div>
+
+        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <h3 className="text-xl font-bold">Distance summary</h3>
+
+          {!result ? (
+            <p className="mt-4 text-sm text-slate-500">
+              Enter at least two locations and click calculate to see the common average distance and individual distances.
+            </p>
+          ) : (
+            <div className="mt-4 space-y-4">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="rounded-2xl bg-slate-950 p-4 text-white">
+                  <p className="text-xs text-slate-400">Common average distance</p>
+                  <p className="mt-1 text-3xl font-bold">{result.avgKm.toFixed(1)} km</p>
+                </div>
+                <div className="rounded-2xl bg-emerald-50 p-4">
+                  <p className="text-xs font-semibold text-emerald-700">Farthest leg</p>
+                  <p className="mt-1 text-3xl font-bold text-emerald-900">{result.maxKm.toFixed(1)} km</p>
+                </div>
+              </div>
+
+              <div className="rounded-xl bg-slate-50 p-3.5 text-sm">
+                <p className="font-semibold text-slate-800">Recommended coordinates</p>
+                <p className="mt-0.5 font-mono text-xs text-slate-600">
+                  {result.lat.toFixed(5)}, {result.lon.toFixed(5)}
+                </p>
+                {result.placeLabel && (
+                  <p className="mt-1 text-xs text-slate-500">Near: {result.placeLabel}</p>
+                )}
+                <a
+                  href={`https://www.google.com/maps/search/?api=1&query=${result.lat},${result.lon}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="mt-2 inline-block text-xs font-semibold text-indigo-600 hover:underline"
+                >
+                  Open point in Google Maps →
+                </a>
+              </div>
+
+              <div className="divide-y rounded-xl border border-slate-100">
+                {result.distances.map((d) => (
+                  <div key={d.id} className="flex items-center justify-between px-4 py-2.5 text-sm">
+                    <span className="font-medium text-slate-700">{d.name}</span>
+                    <span className="font-semibold text-slate-900">{d.km.toFixed(1)} km</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+        <h3 className="text-xl font-bold">Map view</h3>
+        <p className="mt-1 text-sm text-slate-500">
+          Shows participant starting markers, dashed legs, and the calculated meeting point.
+        </p>
+        <div
+          ref={mapContainerRef}
+          className="mt-4 h-96 w-full overflow-hidden rounded-2xl border border-slate-200 bg-slate-100"
+        />
+      </div>
+    </section>
+  );
+}
 
 function VisualLabCard({title,children,tag}:{title:string;children:any;tag?:string}) { return <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7"><div className="mb-4 flex items-center justify-between"><h3 className="text-xl font-bold">{title}</h3>{tag&&<span className="rounded-full bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-700">{tag}</span>}</div>{children}</div>; }
 
@@ -1955,7 +2391,6 @@ function VisualLab() {
   const binary=(Number(decimal)||0).toString(2);
   const [visualQuestion,setVisualQuestion]=useState(""); const [visualAnswer,setVisualAnswer]=useState(""); const [visualLoading,setVisualLoading]=useState(false);
   async function askVisualAI(){setVisualLoading(true);setVisualAnswer("");try{const context=`PN bias ${bias}; rectifier ${rectifier}; filter ${filter}; adder A=${a}, B=${b}, Cin=${cin}, sum=${sum}, carry=${carry}; gate inputs ${gateA},${gateB}; decimal ${decimal}, binary ${binary}.`;const res=await fetch("/api/organise",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"visual",context,question:visualQuestion||"Explain these current interactive states."})});const data=await res.json();if(!res.ok)throw new Error(data.error||"Request failed");setVisualAnswer(data.result||"No answer.");}catch(e:any){setVisualAnswer(e.message||"Could not get explanation.");}finally{setVisualLoading(false);}}
-
 
   return <section className="space-y-6"><div className="overflow-hidden rounded-3xl bg-gradient-to-br from-indigo-950 via-violet-900 to-slate-900 p-8 text-white sm:p-12"><p className="text-xs font-bold uppercase tracking-[.25em] text-violet-200">NOVUS · INTERACTIVE VISUAL LAB</p><h2 className="mt-3 text-4xl font-black tracking-tight sm:text-5xl">Electronics, made alive.</h2><p className="mt-4 max-w-2xl text-violet-100">Explore circuits by changing inputs, bias, and modes. Visuals are reconstructed from your PDFs—excluding the JPEG question sheet.</p><div className="mt-6 flex flex-wrap gap-2">{['Semiconductors','Rectifiers','Logic','Number systems'].map(x=><span key={x} className="rounded-full border border-white/20 bg-white/10 px-3 py-1.5 text-sm">{x}</span>)}</div></div>
     <div className="grid gap-5 xl:grid-cols-2">
