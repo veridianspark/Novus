@@ -502,6 +502,7 @@ async function resizeImage(
 export default function Home() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loaded, setLoaded] = useState(false);
+  const [activeView, setActiveView] = useState<"dashboard" | "spending">("dashboard");
 
   const [schoolInfo, setSchoolInfo] = useState("");
   const [showInput, setShowInput] = useState(false);
@@ -1051,16 +1052,12 @@ export default function Home() {
           <div className="hidden items-center gap-6 text-sm font-medium sm:flex">
             {[
               ["dashboard", "Dashboard"],
-              ["plan", "Plan"],
-              ["tasks", "Tasks"],
-              ["calendar", "Calendar"],
-              ["progress", "Progress"],
               ["spending", "Spending"],
             ].map(([id, label]) => (
               <button
                 key={id}
-                onClick={() => goTo(id)}
-                className="text-slate-600 transition hover:text-indigo-600"
+                onClick={() => setActiveView(id as "dashboard" | "spending")}
+                className={`transition ${activeView === id ? "font-semibold text-indigo-600" : "text-slate-600 hover:text-indigo-600"}`}
               >
                 {label}
               </button>
@@ -1074,6 +1071,8 @@ export default function Home() {
       </nav>
 
       <div className="mx-auto max-w-7xl px-6 py-10">
+        {activeView === "dashboard" && (
+          <>
         {/* ==================================================
             DASHBOARD
         ================================================== */}
@@ -1681,10 +1680,14 @@ History presentation due Monday.`}
           )}
         </section>
 
+          </>
+        )}
+
         {/* ==================================================
             SPENDING ANALYSIS
         ================================================== */}
-        <section id="spending" className="mt-12 scroll-mt-28">
+        {activeView === "spending" && (
+        <section id="spending" className="scroll-mt-28">
           <div className="mb-6 flex flex-col justify-between gap-3 sm:flex-row sm:items-end">
             <div>
               <p className="text-xs font-bold uppercase tracking-widest text-emerald-600">Personal finance</p>
@@ -1733,7 +1736,10 @@ History presentation due Monday.`}
             );
           })()}
         </section>
+        )}
 
+        {activeView === "dashboard" && (
+          <>
         {/* ==================================================
             AI CALLOUT
         ================================================== */}
@@ -1766,6 +1772,8 @@ History presentation due Monday.`}
             </button>
           </div>
         </section>
+          </>
+        )}
 
         {/* FOOTER */}
 
