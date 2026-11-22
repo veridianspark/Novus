@@ -293,6 +293,204 @@ function getGreeting(hour: number): string {
 }
 
 /* ==================================================
+   STUDY PLANNER
+   Spreads each task's work over the days BEFORE its deadline,
+   earliest deadline first, never planning more than `capacity`
+   minutes in a day unless there is no other choice.
+================================================== */
+
+const SESSION_MINUTES = 45;
+const CAPACITY_OPTIONS = [60, 90, 120, 180];
+const CAPACITY_KEY = "schoolsync-capacity";
+
+type PlanSession = { taskId: number; minutes: number };
+type PlanDay = { date: string; sessions: PlanSession[]; minutes: number };
+type Plan = {
+  days: PlanDay[];
+  overloadedDates: string[];
+  atRiskIds: number[];
+  overdueIds: number[];
+};
+
+function buildPlan(tasks: Task[], todayKey: string, capacity: number): Plan {
+  const empty: Plan = { days: [], overloadedDates: [], atRiskIds: [], overdueIds: [] };
+  const start = dateFromKey(todayKey);
+  if (!start) return empty;
+
+  const active = tasks.filter((t) => !t.completed && t.scheduledDate);
+  if (active.length === 0) return empty;
+
+  const overdueIds = active
+    .filter((t) => (t.scheduledDate as string) < todayKey)
+    .map((t) => t.id);
+
+  const deadlineOf = (t: Task): string =>
+    (t.scheduledDate as string) < todayKey ? todayKey : (t.scheduledDate as string);
+
+  // Earliest deadline first; ties broken by priority.
+  const ordered = [...active].sort((a, b) => {
+    const byDeadline = deadlineOf(a).localeCompare(deadlineOf(b));
+    if (byDeadline !== 0) return byDeadline;
+    return PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority];
+  });
+
+  const byDate: Record<string, PlanDay> = {};
+  const loadOf = (key: string): number => byDate[key]?.minutes ?? 0;
+  const overloaded = new Set<string>();
+  const atRisk = new Set<number>();
+
+  for (const task of ordered) {
+    const deadline = deadlineOf(task);
+
+    // Aim to finish the day before the deadline. Due today/tomorrow -> today only.
+    const window: string[] = [];
+    for (let i = 0; i < 60; i++) {
+      const key = formatDate(addDays(start, i));
+      if (key >= deadline) break;
+      window.push(key);
+    }
+    if (window.length === 0) window.push(todayKey);
+
+    let remaining =
+      task.estimatedMinutes && task.estimatedMinutes > 0 ? task.estimatedMinutes : 30;
+
+    while (remaining > 0) {
+      const minutes = Math.min(SESSION_MINUTES, remaining);
+      remaining -= minutes;
+
+      // Pick the lightest day that still has room (spreads the load evenly).
+      let best: string | null = null;
+      for (const key of window) {
+        const load = loadOf(key);
+        if (load + minutes > capacity) continue;
+        if (best === null || load < loadOf(best)) best = key;
+      }
+
+      // Nothing fits: use the lightest day and flag the task as at risk.
+      if (best === null) {
+        best = window.reduce((a, b) => (loadOf(b) < loadOf(a) ? b : a));
+        atRisk.add(task.id);
+      }
+
+      if (!byDate[best]) byDate[best] = { date: best, sessions: [], minutes: 0 };
+      byDate[best].sessions.push({ taskId: task.id, minutes });
+      byDate[best].minutes += minutes;
+      if (byDate[best].minutes > capacity) overloaded.add(best);
+    }
+  }
+
+  return {
+    days: Object.values(byDate).sort((a, b) => a.date.localeCompare(b.date)),
+    overloadedDates: [...overloaded].sort(),
+    atRiskIds: [...atRisk],
+    overdueIds,
+  };
+}
+
+/* ==================================================
+   CALENDAR EXPORT (.ics)
+   Every dated, unfinished task becomes an all-day event with two
+   reminders: 9 AM the day before, and 9 AM on the day.
+================================================== */
+
+function icsEscape(value: string): string {
+  return value
+    .replace(/\\/g, "\\\\")
+    .replace(/;/g, "\\;")
+    .replace(/,/g, "\\,")
+    .replace(/\r?\n/g, "\\n");
+}
+
+function buildICS(tasks: Task[]): string {
+  const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+
+  const lines: string[] = [
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    "PRODID:-//StudySync//Task export//EN",
+    "CALSCALE:GREGORIAN",
+    "METHOD:PUBLISH",
+  ];
+
+  for (const task of tasks) {
+    if (task.completed || !task.scheduledDate) continue;
+
+    const date = dateFromKey(task.scheduledDate);
+    if (!date) continue;
+
+    const next = formatDate(addDays(date, 1));
+
+    lines.push(
+      "BEGIN:VEVENT",
+      `UID:studysync-${task.id}-${task.scheduledDate}@studysync`,
+      `DTSTAMP:${stamp}`,
+      `DTSTART;VALUE=DATE:${task.scheduledDate.replace(/-/g, "")}`,
+      `DTEND;VALUE=DATE:${next.replace(/-/g, "")}`,
+      `SUMMARY:${icsEscape(`${task.title} (${task.subject})`)}`,
+      `DESCRIPTION:${icsEscape(
+        `${task.priority} priority, about ${task.estimatedMinutes ?? 30} min`
+      )}`,
+      "BEGIN:VALARM",
+      "ACTION:DISPLAY",
+      "DESCRIPTION:Due tomorrow",
+      "TRIGGER:-PT15H",
+      "END:VALARM",
+      "BEGIN:VALARM",
+      "ACTION:DISPLAY",
+      "DESCRIPTION:Due today",
+      "TRIGGER:PT9H",
+      "END:VALARM",
+      "END:VEVENT"
+    );
+  }
+
+  lines.push("END:VCALENDAR");
+  return lines.join("\r\n");
+}
+
+/* ==================================================
+   IMAGE INPUT
+   Screenshots/photos are shrunk in the browser before upload so
+   they stay well under the request size limit.
+================================================== */
+
+async function resizeImage(
+  file: File,
+  maxSide = 1600
+): Promise<{ base64: string; mimeType: string }> {
+  const url = URL.createObjectURL(file);
+
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const el = new Image();
+      el.onload = () => resolve(el);
+      el.onerror = () => reject(new Error("Could not read that image."));
+      el.src = url;
+    });
+
+    const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+    const width = Math.max(1, Math.round(img.width * scale));
+    const height = Math.max(1, Math.round(img.height * scale));
+
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("Could not process that image.");
+
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, width, height);
+    ctx.drawImage(img, 0, 0, width, height);
+
+    const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
+    return { base64: dataUrl.split(",")[1] ?? "", mimeType: "image/jpeg" };
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+/* ==================================================
    MAIN COMPONENT
 ================================================== */
 
@@ -305,6 +503,8 @@ export default function Home() {
   const [isOrganizing, setIsOrganizing] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [image, setImage] = useState<{ data: string; mimeType: string; name: string } | null>(null);
+  const [capacity, setCapacity] = useState(120);
 
   // Set on the client only, so server and client markup match (no hydration errors).
   const [todayKey, setTodayKey] = useState("");
@@ -422,6 +622,144 @@ export default function Home() {
   }, [tasks]);
 
   /* ==================================================
+     STUDY PLAN
+  ================================================== */
+
+  useEffect(() => {
+    try {
+      const saved = Number(localStorage.getItem(CAPACITY_KEY));
+      if (CAPACITY_OPTIONS.includes(saved)) setCapacity(saved);
+    } catch {
+      // ignore storage problems
+    }
+  }, []);
+
+  function changeCapacity(value: number) {
+    setCapacity(value);
+    try {
+      localStorage.setItem(CAPACITY_KEY, String(value));
+    } catch {
+      // ignore storage problems
+    }
+  }
+
+  const plan = useMemo(
+    () => (todayKey ? buildPlan(tasks, todayKey, capacity) : null),
+    [tasks, todayKey, capacity]
+  );
+
+  const todayItems = useMemo(() => {
+    const day = plan?.days.find((d) => d.date === todayKey);
+    if (!day) return [] as { task: Task; minutes: number }[];
+
+    const merged = new Map<number, number>();
+    for (const session of day.sessions) {
+      merged.set(session.taskId, (merged.get(session.taskId) ?? 0) + session.minutes);
+    }
+
+    const items: { task: Task; minutes: number }[] = [];
+    merged.forEach((minutes, taskId) => {
+      const task = tasks.find((t) => t.id === taskId);
+      if (task) items.push({ task, minutes });
+    });
+    return items;
+  }, [plan, tasks, todayKey]);
+
+  const todayMinutes = todayItems.reduce((sum, item) => sum + item.minutes, 0);
+
+  const weekView = useMemo(() => {
+    const start = todayKey ? dateFromKey(todayKey) : null;
+    if (!start || !plan) return [] as { key: string; label: string; minutes: number }[];
+
+    return Array.from({ length: 7 }, (_, i) => {
+      const d = addDays(start, i);
+      const key = formatDate(d);
+      const day = plan.days.find((x) => x.date === key);
+      return {
+        key,
+        label: i === 0 ? "Today" : d.toLocaleDateString("en-US", { weekday: "short" }),
+        minutes: day?.minutes ?? 0,
+      };
+    });
+  }, [plan, todayKey]);
+
+  const planWarnings = useMemo(() => {
+    const out: string[] = [];
+    if (!plan) return out;
+
+    const title = (id: number) => tasks.find((t) => t.id === id)?.title ?? "A task";
+
+    if (plan.overdueIds.length > 0) {
+      out.push(`Overdue: ${plan.overdueIds.map(title).join(", ")}`);
+    }
+
+    for (const date of plan.overloadedDates) {
+      const day = plan.days.find((d) => d.date === date);
+      const d = dateFromKey(date);
+      const label = d
+        ? d.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" })
+        : date;
+      out.push(`${label} is overloaded: ${day?.minutes ?? 0} min planned (your limit is ${capacity}).`);
+    }
+
+    if (plan.atRiskIds.length > 0) {
+      out.push(
+        `These may not fit before their deadlines: ${plan.atRiskIds.map(title).join(", ")}. Start earlier or raise your daily study time.`
+      );
+    }
+
+    return out;
+  }, [plan, tasks, capacity]);
+
+  const hasPlannableTasks = tasks.some((t) => !t.completed && t.scheduledDate);
+
+  function exportCalendar() {
+    const ics = buildICS(tasks);
+
+    if (!ics.includes("BEGIN:VEVENT")) {
+      setNotice("There are no upcoming dated tasks to export yet.");
+      return;
+    }
+
+    const blob = new Blob([ics], { type: "text/calendar;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "studysync-tasks.ics";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+
+    setNotice(
+      "Calendar file downloaded. Open it to add your deadlines, with reminders, to Google or Apple Calendar."
+    );
+  }
+
+  async function handleFile(file: File | null | undefined) {
+    if (!file) return;
+    setError("");
+
+    try {
+      if (file.type.startsWith("image/")) {
+        if (file.size > 15 * 1024 * 1024) {
+          throw new Error("That image is too large. Try a smaller screenshot.");
+        }
+        const { base64, mimeType } = await resizeImage(file);
+        setImage({ data: base64, mimeType, name: file.name || "Pasted screenshot" });
+      } else if (file.type === "text/plain" || file.name.toLowerCase().endsWith(".txt")) {
+        const text = await file.text();
+        // Chat exports are long and the latest messages matter most.
+        setSchoolInfo(text.slice(-7500).trim());
+      } else {
+        throw new Error("Please add a screenshot (JPG or PNG) or a .txt chat export.");
+      }
+    } catch (err: any) {
+      setError(err?.message || "Could not read that file.");
+    }
+  }
+
+  /* ==================================================
      TASK ACTIONS
   ================================================== */
 
@@ -449,8 +787,8 @@ export default function Home() {
   ================================================== */
 
   async function organizeTasks() {
-    if (!schoolInfo.trim()) {
-      setError("Paste some school information first.");
+    if (!schoolInfo.trim() && !image) {
+      setError("Paste some school information or add a screenshot first.");
       return;
     }
 
@@ -464,6 +802,7 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           schoolInfo: schoolInfo.trim(),
+          image: image ? { data: image.data, mimeType: image.mimeType } : undefined,
           // The server runs in UTC, so tell it the student's local date.
           today: formatDate(new Date()),
         }),
@@ -514,6 +853,7 @@ export default function Home() {
       });
 
       setSchoolInfo("");
+      setImage(null);
       setShowInput(false);
 
       // Jump the calendar to the earliest new dated task.
@@ -660,6 +1000,7 @@ export default function Home() {
           <div className="hidden items-center gap-6 text-sm font-medium sm:flex">
             {[
               ["dashboard", "Dashboard"],
+              ["plan", "Plan"],
               ["tasks", "Tasks"],
               ["calendar", "Calendar"],
               ["progress", "Progress"],
@@ -739,8 +1080,8 @@ export default function Home() {
                 <p className="text-lg font-bold">Add school information</p>
 
                 <p className="mt-1 text-sm text-slate-500">
-                  Paste an assignment, announcement, email, or messy list.
-                  SchoolSync will organize it for you.
+                  Paste text, or add a screenshot or photo of a chat, notice or
+                  timetable. SchoolSync will organize it for you.
                 </p>
               </div>
 
@@ -751,6 +1092,15 @@ export default function Home() {
                     setSchoolInfo(event.target.value);
                     setError("");
                   }}
+                  onPaste={(event) => {
+                    const file = Array.from(event.clipboardData.files).find((f) =>
+                      f.type.startsWith("image/")
+                    );
+                    if (file) {
+                      event.preventDefault();
+                      void handleFile(file);
+                    }
+                  }}
                   placeholder={`Example:
 
 Math worksheet 4 due Thursday.
@@ -759,6 +1109,38 @@ Don't forget your lab coat tomorrow.
 History presentation due Monday.`}
                   className="min-h-40 w-full resize-none rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm outline-none transition placeholder:text-slate-400 focus:border-indigo-400 focus:bg-white focus:ring-4 focus:ring-indigo-50"
                 />
+
+                <div className="mt-3 flex flex-wrap items-center gap-3">
+                  <label className="cursor-pointer rounded-xl border border-dashed border-indigo-300 bg-indigo-50 px-4 py-2 text-sm font-semibold text-indigo-700 transition hover:bg-indigo-100">
+                    📷 Add screenshot or chat export
+                    <input
+                      type="file"
+                      accept="image/*,.txt,text/plain"
+                      className="hidden"
+                      onChange={(event) => {
+                        void handleFile(event.target.files?.[0]);
+                        event.target.value = "";
+                      }}
+                    />
+                  </label>
+
+                  {image && (
+                    <span className="inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1.5 text-xs text-slate-600">
+                      🖼️ {image.name}
+                      <button
+                        onClick={() => setImage(null)}
+                        aria-label="Remove image"
+                        className="font-bold text-slate-400 hover:text-red-500"
+                      >
+                        ✕
+                      </button>
+                    </span>
+                  )}
+
+                  <span className="text-xs text-slate-400">
+                    or press Ctrl+V to paste a screenshot
+                  </span>
+                </div>
 
                 {error && (
                   <div
@@ -776,7 +1158,7 @@ History presentation due Monday.`}
 
                   <button
                     onClick={organizeTasks}
-                    disabled={!schoolInfo.trim() || isOrganizing}
+                    disabled={(!schoolInfo.trim() && !image) || isOrganizing}
                     className="rounded-xl bg-indigo-600 px-6 py-3 font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {isOrganizing ? "✨ Organizing..." : "✨ Organize with AI"}
@@ -910,6 +1292,131 @@ History presentation due Monday.`}
             </div>
           </section>
         </section>
+        {/* ==================================================
+            STUDY PLAN
+        ================================================== */}
+
+        <section id="plan" className="mt-12 scroll-mt-28">
+          <div className="mb-5 flex flex-col justify-between gap-3 sm:flex-row sm:items-end">
+            <div>
+              <h3 className="text-2xl font-bold">Your study plan</h3>
+              <p className="mt-1 text-sm text-slate-500">
+                Work is spread over the days before each deadline so no single day gets crushed.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3">
+              <label className="flex items-center gap-2 text-sm text-slate-500">
+                Study time per day
+                <select
+                  value={capacity}
+                  onChange={(event) => changeCapacity(Number(event.target.value))}
+                  className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm font-semibold text-slate-700"
+                >
+                  {CAPACITY_OPTIONS.map((minutes) => (
+                    <option key={minutes} value={minutes}>
+                      {minutes} min
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <button
+                onClick={exportCalendar}
+                className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold transition hover:bg-slate-50"
+              >
+                📅 Add to my calendar (.ics)
+              </button>
+            </div>
+          </div>
+
+          {!hasPlannableTasks ? (
+            <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-500">
+              Add some schoolwork with deadlines and your daily plan will appear here.
+            </div>
+          ) : (
+            <div className="space-y-5">
+              {planWarnings.length > 0 && (
+                <div
+                  role="status"
+                  className="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-800"
+                >
+                  <p className="font-bold">⚠️ Heads up</p>
+                  <ul className="mt-2 list-disc space-y-1 pl-5">
+                    {planWarnings.map((warning) => (
+                      <li key={warning}>{warning}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              <div className="grid gap-5 lg:grid-cols-5">
+                <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm lg:col-span-2">
+                  <div className="flex items-baseline justify-between">
+                    <p className="text-sm font-semibold text-slate-500">TODAY</p>
+                    <p className="text-sm text-slate-400">{todayMinutes} min planned</p>
+                  </div>
+
+                  {todayItems.length === 0 ? (
+                    <p className="mt-4 text-sm text-slate-500">
+                      Nothing is planned for today. Enjoy the breathing room.
+                    </p>
+                  ) : (
+                    <ul className="mt-4 space-y-3">
+                      {todayItems.map(({ task, minutes }) => (
+                        <li
+                          key={task.id}
+                          className="flex items-center justify-between gap-3 rounded-xl bg-slate-50 p-3"
+                        >
+                          <div>
+                            <p className="text-sm font-semibold">{task.title}</p>
+                            <p className="text-xs text-slate-400">
+                              {task.subject} • {minutes} min today • due {task.due}
+                            </p>
+                          </div>
+                          <button
+                            onClick={() => toggleTask(task.id)}
+                            className="shrink-0 rounded-full bg-white px-3 py-1.5 text-xs font-bold shadow-sm ring-1 ring-slate-200 hover:bg-indigo-50"
+                          >
+                            Done
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+
+                <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm lg:col-span-3">
+                  <p className="text-sm font-semibold text-slate-500">NEXT 7 DAYS</p>
+                  <p className="mt-1 text-xs text-slate-400">
+                    Bar height shows planned minutes against your {capacity} min limit. Red means overloaded.
+                  </p>
+
+                  <div className="mt-5 grid grid-cols-7 gap-2">
+                    {weekView.map((day) => {
+                      const percent = Math.min(100, Math.round((day.minutes / capacity) * 100));
+                      const over = day.minutes > capacity;
+
+                      return (
+                        <div key={day.key} className="flex flex-col items-center gap-2">
+                          <div className="flex h-28 w-full items-end overflow-hidden rounded-lg bg-slate-100">
+                            <div
+                              className={`w-full transition-all ${over ? "bg-red-400" : "bg-indigo-500"}`}
+                              style={{ height: `${percent}%` }}
+                            />
+                          </div>
+                          <p className="text-xs font-semibold text-slate-600">{day.label}</p>
+                          <p className="text-[11px] text-slate-400">{day.minutes} min</p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </section>
+
 
         {/* ==================================================
             TASKS
