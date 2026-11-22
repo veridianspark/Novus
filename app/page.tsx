@@ -24,6 +24,8 @@ type Task = {
   scheduledDate?: string;
 };
 
+type Confidence = "exact" | "approximate" | "not_found";
+
 type PersonPoint = {
   id: number;
   name: string;
@@ -31,6 +33,7 @@ type PersonPoint = {
   lat: number | null;
   lon: number | null;
   resolvedName?: string;
+  confidence?: Confidence;
 };
 
 type MeetupResult = {
@@ -2027,7 +2030,55 @@ History presentation due Monday.`}
 }
 
 /* ==================================================
-   MEETUP TAB COMPONENT
+   MEETUP TAB COMPONENT (AI location detection)
+================================================== */
+
+/* ==================================================
+   LEAFLET LOADER (loads once, safe against races)
+================================================== */
+
+let leafletPromise: Promise<any> | null = null;
+
+function loadLeaflet(): Promise<any> {
+  if (typeof window === "undefined") return Promise.reject(new Error("no window"));
+  const w = window as any;
+  if (w.L) return Promise.resolve(w.L);
+  if (leafletPromise) return leafletPromise;
+
+  leafletPromise = new Promise((resolve, reject) => {
+    if (!document.getElementById("leaflet-css")) {
+      const link = document.createElement("link");
+      link.id = "leaflet-css";
+      link.rel = "stylesheet";
+      link.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
+      document.head.appendChild(link);
+    }
+
+    const script = document.createElement("script");
+    script.id = "leaflet-js";
+    script.src = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js";
+    script.async = true;
+    script.onload = () => resolve((window as any).L);
+    script.onerror = () => {
+      leafletPromise = null;
+      reject(new Error("Could not load the map."));
+    };
+    document.body.appendChild(script);
+  });
+
+  return leafletPromise;
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+/* ==================================================
+   COMPONENT
 ================================================== */
 
 function MeetupTab() {
@@ -2036,16 +2087,22 @@ function MeetupTab() {
     { id: 2, name: "Person 2", query: "", lat: null, lon: null },
   ]);
   const [result, setResult] = useState<MeetupResult | null>(null);
+  const [warnings, setWarnings] = useState<string[]>([]);
+  const [aiNote, setAiNote] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [mapError, setMapError] = useState("");
+
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapInstanceRef = useRef<any>(null);
+  const nextId = useRef(3);
 
   function addPerson() {
-    const nextNum = people.length + 1;
+    if (people.length >= 8) return;
+    const id = nextId.current++;
     setPeople((curr) => [
       ...curr,
-      { id: Date.now() + nextNum, name: `Person ${nextNum}`, query: "", lat: null, lon: null },
+      { id, name: `Person ${curr.length + 1}`, query: "", lat: null, lon: null },
     ]);
   }
 
@@ -2062,34 +2119,58 @@ function MeetupTab() {
           ? {
               ...p,
               ...patch,
-              ...(patch.query !== undefined ? { lat: null, lon: null, resolvedName: undefined } : {}),
+              // Editing the place invalidates the previous lookup.
+              ...(patch.query !== undefined
+                ? { lat: null, lon: null, resolvedName: undefined, confidence: undefined }
+                : {}),
             }
           : p
       )
     );
+    if (patch.query !== undefined) setResult(null);
   }
 
-  async function geocodePlace(
-    query: string
-  ): Promise<{ lat: number; lon: number; displayName: string }> {
-    const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(
-      query
-    )}`;
-    const res = await fetch(url, { headers: { Accept: "application/json" } });
-    if (!res.ok) throw new Error("Could not look up location right now.");
-    const data = await res.json();
-    if (!Array.isArray(data) || data.length === 0) {
-      throw new Error(`Location not found for "${query}". Try adding a city or landmark.`);
+  function useMyLocation(id: number) {
+    if (!navigator.geolocation) {
+      setError("Your browser can't share its location.");
+      return;
     }
-    return {
-      lat: Number(data[0].lat),
-      lon: Number(data[0].lon),
-      displayName: String(data[0].display_name || query),
-    };
+    setError("");
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        const lat = pos.coords.latitude;
+        const lon = pos.coords.longitude;
+        let label = "My current location";
+        try {
+          const res = await fetch("/api/organise", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "reverse", lat, lon }),
+          });
+          const data = await res.json();
+          if (data?.label) label = data.label;
+        } catch {
+          // keep the generic label
+        }
+        setPeople((curr) =>
+          curr.map((p) =>
+            p.id === id
+              ? { ...p, query: label, lat, lon, resolvedName: label, confidence: "exact" }
+              : p
+          )
+        );
+        setResult(null);
+      },
+      () => setError("Couldn't get your location. Check the browser's location permission."),
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
   }
 
   async function calculateMeetup() {
     setError("");
+    setWarnings([]);
+    setAiNote("");
+
     const filled = people.filter((p) => p.query.trim().length > 0);
     if (filled.length < 2) {
       setError("Enter starting locations for at least 2 people.");
@@ -2098,73 +2179,124 @@ function MeetupTab() {
 
     setLoading(true);
     try {
-      const resolved = await Promise.all(
-        filled.map(async (p) => {
-          const geo = await geocodePlace(p.query.trim());
-          return { ...p, lat: geo.lat, lon: geo.lon, resolvedName: geo.displayName };
-        })
-      );
+      // People who already have coordinates (e.g. "use my location") skip the lookup.
+      const needLookup = filled.filter((p) => p.lat === null || p.lon === null);
+      const resolved = new Map<number, PersonPoint>();
+      filled.forEach((p) => {
+        if (p.lat !== null && p.lon !== null) resolved.set(p.id, p);
+      });
 
-      setPeople((curr) =>
-        curr.map((p) => {
-          const match = resolved.find((r) => r.id === p.id);
-          return match ? match : p;
-        })
-      );
+      if (needLookup.length > 0) {
+        // Send everyone so the AI can use the other entries to pick the right city.
+        const res = await fetch("/api/organise", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "locate",
+            queries: filled.map((p) => ({ id: p.id, name: p.name, query: p.query.trim() })),
+          }),
+        });
+
+        let data: any = null;
+        try {
+          data = await res.json();
+        } catch {
+          throw new Error("The server sent back something unreadable. Try again.");
+        }
+        if (!res.ok) throw new Error(data?.error || "Could not look up those locations.");
+
+        const results: any[] = Array.isArray(data?.results) ? data.results : [];
+        for (const p of needLookup) {
+          const r = results.find((x) => x.id === p.id);
+          if (r && r.lat != null && r.lon != null) {
+            resolved.set(p.id, {
+              ...p,
+              lat: r.lat,
+              lon: r.lon,
+              resolvedName: r.displayName || r.interpreted || p.query,
+              confidence: r.confidence,
+            });
+          } else {
+            resolved.set(p.id, { ...p, confidence: "not_found" });
+          }
+        }
+
+        if (Array.isArray(data?.warnings)) setWarnings(data.warnings);
+        if (data?.usedAi === false) {
+          setAiNote("The AI helper was unavailable, so plain search was used. Add city names for better accuracy.");
+        }
+      }
+
+      setPeople((curr) => curr.map((p) => resolved.get(p.id) ?? p));
+
+      const missing = filled.filter((p) => resolved.get(p.id)?.lat == null);
+      if (missing.length > 0) {
+        throw new Error(
+          `Couldn't find: ${missing.map((p) => `${p.name} ("${p.query}")`).join(", ")}. Try adding a city or a nearby landmark.`
+        );
+      }
 
       const best = computeBestMeetingPoint(
-        resolved.map((r) => ({ id: r.id, name: r.name, lat: r.lat, lon: r.lon }))
+        filled.map((p) => {
+          const r = resolved.get(p.id)!;
+          return { id: p.id, name: p.name, lat: r.lat as number, lon: r.lon as number };
+        })
       );
 
       try {
-        const revRes = await fetch(
-          `https://nominatim.openstreetmap.org/reverse?format=json&lat=${best.lat}&lon=${best.lon}`
-        );
-        if (revRes.ok) {
-          const rev = await revRes.json();
-          if (rev?.display_name) {
-            best.placeLabel = String(rev.display_name).split(",").slice(0, 3).join(", ");
-          }
-        }
+        const revRes = await fetch("/api/organise", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "reverse", lat: best.lat, lon: best.lon }),
+        });
+        const rev = await revRes.json();
+        if (rev?.label) best.placeLabel = String(rev.label);
       } catch {
-        // Ignore reverse geocode failure
+        // label is optional
       }
 
       setResult(best);
     } catch (err: any) {
+      setResult(null);
       setError(err?.message || "Failed to calculate meeting point.");
     } finally {
       setLoading(false);
     }
   }
 
-  useEffect(() => {
-    const validPoints = people.filter((p) => p.lat !== null && p.lon !== null) as {
-      id: number;
-      name: string;
-      lat: number;
-      lon: number;
-      resolvedName?: string;
-    }[];
+  /* ---------------- Map ---------------- */
 
-    if (!mapContainerRef.current) return;
+  // Only redraw when the actual points change, not on every keystroke.
+  const pointsKey = JSON.stringify([
+    people.map((p) => [p.id, p.name, p.lat, p.lon]),
+    result ? [result.lat, result.lon] : null,
+  ]);
+
+  useEffect(() => {
+    let cancelled = false;
 
     async function renderMap() {
-      const L = (window as any).L;
-      if (!L || !mapContainerRef.current) return;
+      if (!mapContainerRef.current) return;
 
-      if (!document.getElementById("leaflet-css")) {
-        const link = document.createElement("link");
-        link.id = "leaflet-css";
-        link.rel = "stylesheet";
-        link.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
-        document.head.appendChild(link);
+      let L: any;
+      try {
+        L = await loadLeaflet();
+        setMapError("");
+      } catch (err: any) {
+        setMapError(err?.message || "Could not load the map.");
+        return;
       }
+      if (cancelled || !mapContainerRef.current) return;
 
       if (mapInstanceRef.current) {
         mapInstanceRef.current.remove();
         mapInstanceRef.current = null;
       }
+
+      const validPoints = people.filter((p) => p.lat !== null && p.lon !== null) as (PersonPoint & {
+        lat: number;
+        lon: number;
+      })[];
 
       const centerLat = result ? result.lat : validPoints[0]?.lat ?? 12.9716;
       const centerLon = result ? result.lon : validPoints[0]?.lon ?? 77.5946;
@@ -2174,6 +2306,7 @@ function MeetupTab() {
 
       L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
         attribution: "&copy; OpenStreetMap contributors",
+        maxZoom: 19,
       }).addTo(map);
 
       const latLngs: [number, number][] = [];
@@ -2182,7 +2315,7 @@ function MeetupTab() {
         latLngs.push([p.lat, p.lon]);
         L.marker([p.lat, p.lon])
           .addTo(map)
-          .bindPopup(`<b>${p.name}</b><br/>${p.resolvedName || ""}`);
+          .bindPopup(`<b>${escapeHtml(p.name)}</b><br/>${escapeHtml(p.resolvedName || "")}`);
 
         if (result) {
           L.polyline(
@@ -2212,29 +2345,32 @@ function MeetupTab() {
       }
     }
 
-    if ((window as any).L) {
-      void renderMap();
-    } else {
-      const existingScript = document.getElementById("leaflet-js") as HTMLScriptElement | null;
-      if (existingScript) {
-        existingScript.addEventListener("load", () => void renderMap(), { once: true });
-      } else {
-        const script = document.createElement("script");
-        script.id = "leaflet-js";
-        script.src = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js";
-        script.async = true;
-        script.onload = () => void renderMap();
-        document.body.appendChild(script);
-      }
-    }
+    void renderMap();
 
     return () => {
+      cancelled = true;
       if (mapInstanceRef.current) {
         mapInstanceRef.current.remove();
         mapInstanceRef.current = null;
       }
     };
-  }, [people, result]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pointsKey]);
+
+  /* ---------------- Render ---------------- */
+
+  function statusChip(p: PersonPoint) {
+    if (p.confidence === "exact") {
+      return <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-bold text-emerald-700">Found</span>;
+    }
+    if (p.confidence === "approximate") {
+      return <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-bold text-amber-700">Approximate</span>;
+    }
+    if (p.confidence === "not_found") {
+      return <span className="rounded-full bg-red-50 px-2 py-0.5 text-[11px] font-bold text-red-600">Not found</span>;
+    }
+    return null;
+  }
 
   return (
     <section id="meetup" className="scroll-mt-28 space-y-6">
@@ -2244,7 +2380,8 @@ function MeetupTab() {
         </p>
         <h2 className="mt-1 text-3xl font-bold">Best meeting point</h2>
         <p className="mt-2 text-slate-500">
-          Add 2 or more starting points to calculate the spot with the lowest common average distance.
+          Type places any way you like: a neighbourhood, a landmark, a nickname, even with typos. AI works out where
+          each one is, using everyone&apos;s entries to pick the right city.
         </p>
       </div>
 
@@ -2255,7 +2392,8 @@ function MeetupTab() {
             <button
               type="button"
               onClick={addPerson}
-              className="rounded-xl border border-slate-200 px-3 py-1.5 text-sm font-semibold hover:bg-slate-50"
+              disabled={people.length >= 8}
+              className="rounded-xl border border-slate-200 px-3 py-1.5 text-sm font-semibold hover:bg-slate-50 disabled:opacity-40"
             >
               + Add person
             </button>
@@ -2263,44 +2401,70 @@ function MeetupTab() {
 
           <div className="mt-4 space-y-3">
             {people.map((person, idx) => (
-              <div
-                key={person.id}
-                className="flex flex-col gap-2 rounded-xl bg-slate-50 p-3 sm:flex-row sm:items-center"
-              >
-                <input
-                  value={person.name}
-                  onChange={(e) => updatePerson(person.id, { name: e.target.value })}
-                  placeholder={`Person ${idx + 1}`}
-                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium sm:w-36"
-                />
-                <input
-                  value={person.query}
-                  onChange={(e) => updatePerson(person.id, { query: e.target.value })}
-                  placeholder="Area, neighborhood, or landmark"
-                  className="flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-indigo-400"
-                />
-                {people.length > 2 && (
+              <div key={person.id} className="rounded-xl bg-slate-50 p-3">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                  <input
+                    value={person.name}
+                    onChange={(e) => updatePerson(person.id, { name: e.target.value })}
+                    placeholder={`Person ${idx + 1}`}
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium sm:w-36"
+                  />
+                  <input
+                    value={person.query}
+                    onChange={(e) => updatePerson(person.id, { query: e.target.value })}
+                    placeholder="e.g. koramangla 5th block, or Phoenix Mall"
+                    className="flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-indigo-400"
+                  />
                   <button
                     type="button"
-                    onClick={() => removePerson(person.id)}
-                    aria-label={`Remove ${person.name}`}
-                    className="rounded-lg px-2.5 py-2 text-sm text-slate-400 hover:bg-red-50 hover:text-red-500"
+                    onClick={() => useMyLocation(person.id)}
+                    title="Use my current location"
+                    aria-label={`Use my current location for ${person.name}`}
+                    className="rounded-lg px-2.5 py-2 text-sm text-slate-500 hover:bg-indigo-50 hover:text-indigo-600"
                   >
-                    ✕
+                    📍
                   </button>
+                  {people.length > 2 && (
+                    <button
+                      type="button"
+                      onClick={() => removePerson(person.id)}
+                      aria-label={`Remove ${person.name}`}
+                      className="rounded-lg px-2.5 py-2 text-sm text-slate-400 hover:bg-red-50 hover:text-red-500"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+
+                {person.confidence && (
+                  <div className="mt-2 flex items-start gap-2 text-xs text-slate-500">
+                    {statusChip(person)}
+                    {person.resolvedName && (
+                      <span className="min-w-0 break-words">{person.resolvedName}</span>
+                    )}
+                  </div>
                 )}
               </div>
             ))}
           </div>
 
           {error && (
-            <div
-              role="alert"
-              className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
-            >
+            <div role="alert" className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
               {error}
             </div>
           )}
+
+          {warnings.length > 0 && (
+            <div role="status" className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              <ul className="list-disc space-y-1 pl-5">
+                {warnings.map((w) => (
+                  <li key={w}>{w}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {aiNote && <p className="mt-3 text-xs text-slate-500">{aiNote}</p>}
 
           <button
             type="button"
@@ -2308,7 +2472,7 @@ function MeetupTab() {
             disabled={loading}
             className="mt-5 w-full rounded-xl bg-indigo-600 px-5 py-3 font-semibold text-white transition hover:bg-indigo-700 disabled:opacity-50"
           >
-            {loading ? "Calculating meeting point…" : "Calculate best meeting point"}
+            {loading ? "✨ Finding locations…" : "✨ Find best meeting point"}
           </button>
         </div>
 
@@ -2317,7 +2481,8 @@ function MeetupTab() {
 
           {!result ? (
             <p className="mt-4 text-sm text-slate-500">
-              Enter at least two locations and click calculate to see the common average distance and individual distances.
+              Enter at least two locations and click the button to see the common average distance and each
+              person&apos;s distance.
             </p>
           ) : (
             <div className="mt-4 space-y-4">
@@ -2337,9 +2502,7 @@ function MeetupTab() {
                 <p className="mt-0.5 font-mono text-xs text-slate-600">
                   {result.lat.toFixed(5)}, {result.lon.toFixed(5)}
                 </p>
-                {result.placeLabel && (
-                  <p className="mt-1 text-xs text-slate-500">Near: {result.placeLabel}</p>
-                )}
+                {result.placeLabel && <p className="mt-1 text-xs text-slate-500">Near: {result.placeLabel}</p>}
                 <a
                   href={`https://www.google.com/maps/search/?api=1&query=${result.lat},${result.lon}`}
                   target="_blank"
@@ -2366,8 +2529,9 @@ function MeetupTab() {
       <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
         <h3 className="text-xl font-bold">Map view</h3>
         <p className="mt-1 text-sm text-slate-500">
-          Shows participant starting markers, dashed legs, and the calculated meeting point.
+          Shows participant markers, dashed legs, and the calculated meeting point.
         </p>
+        {mapError && <p className="mt-2 text-sm text-red-600">{mapError}</p>}
         <div
           ref={mapContainerRef}
           className="mt-4 h-96 w-full overflow-hidden rounded-2xl border border-slate-200 bg-slate-100"
