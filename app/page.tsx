@@ -41,6 +41,8 @@ type MeetupResult = {
   lon: number;
   avgKm: number;
   maxKm: number;
+  minKm: number;
+  gapKm: number;
   distances: { id: number; name: string; km: number }[];
   placeLabel?: string;
 };
@@ -531,29 +533,68 @@ function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): nu
   return 2 * R * Math.asin(Math.sqrt(a));
 }
 
+/**
+ * Finds a FAIR meeting point: the place that keeps the farthest trip as short as
+ * possible AND keeps everyone's trip close to the same length.
+ *
+ * (The old version minimised the AVERAGE distance, which drags the point toward
+ * whichever people live close together and makes the outlier travel far.)
+ *
+ *  1. Start from the minimax centre (smallest circle that covers everyone).
+ *  2. Refine with a local search on  cost = 2*max - min,  which punishes both a
+ *     long worst trip and a big gap between the longest and shortest trip.
+ */
 function computeBestMeetingPoint(
   points: { id: number; name: string; lat: number; lon: number }[]
 ): MeetupResult {
+  const distsFrom = (lat: number, lon: number) =>
+    points.map((p) => haversineKm(lat, lon, p.lat, p.lon));
+
+  const cost = (lat: number, lon: number) => {
+    const d = distsFrom(lat, lon);
+    const mx = Math.max(...d);
+    const mn = Math.min(...d);
+    return 2 * mx - mn;
+  };
+
+  // Step 1: minimax centre (Badoiu-Clarkson).
   let lat = points.reduce((s, p) => s + p.lat, 0) / points.length;
   let lon = points.reduce((s, p) => s + p.lon, 0) / points.length;
-
-  for (let iter = 0; iter < 40; iter++) {
-    let numLat = 0;
-    let numLon = 0;
-    let denom = 0;
-
+  for (let i = 1; i <= 2000; i++) {
+    let far = points[0];
+    let farDist = -1;
     for (const p of points) {
-      const dist = Math.max(haversineKm(lat, lon, p.lat, p.lon), 0.001);
-      const w = 1 / dist;
-      numLat += p.lat * w;
-      numLon += p.lon * w;
-      denom += w;
+      const d = haversineKm(lat, lon, p.lat, p.lon);
+      if (d > farDist) {
+        farDist = d;
+        far = p;
+      }
     }
+    lat += (far.lat - lat) / (i + 1);
+    lon += (far.lon - lon) / (i + 1);
+  }
 
-    if (denom > 0) {
-      lat = numLat / denom;
-      lon = numLon / denom;
+  // Step 2: pattern search on the fairness cost.
+  let step = 0.05; // degrees (~5 km)
+  let best = cost(lat, lon);
+  const dirs = [
+    [1, 0], [-1, 0], [0, 1], [0, -1],
+    [1, 1], [1, -1], [-1, 1], [-1, -1],
+  ];
+  for (let iter = 0; iter < 5000 && step > 1e-6; iter++) {
+    let improved = false;
+    for (const [dLat, dLon] of dirs) {
+      const nLat = lat + dLat * step;
+      const nLon = lon + dLon * step;
+      const c = cost(nLat, nLon);
+      if (c < best - 1e-9) {
+        best = c;
+        lat = nLat;
+        lon = nLon;
+        improved = true;
+      }
     }
+    if (!improved) step /= 2;
   }
 
   const distances = points.map((p) => ({
@@ -562,10 +603,19 @@ function computeBestMeetingPoint(
     km: haversineKm(p.lat, p.lon, lat, lon),
   }));
 
-  const avgKm = distances.reduce((s, d) => s + d.km, 0) / distances.length;
-  const maxKm = Math.max(...distances.map((d) => d.km));
+  const kms = distances.map((d) => d.km);
+  const maxKm = Math.max(...kms);
+  const minKm = Math.min(...kms);
 
-  return { lat, lon, avgKm, maxKm, distances };
+  return {
+    lat,
+    lon,
+    avgKm: kms.reduce((s, k) => s + k, 0) / kms.length,
+    maxKm,
+    minKm,
+    gapKm: maxKm - minKm,
+    distances,
+  };
 }
 
 const NOVUS_FLASHCARDS: { topic: string; question: string; answer: string }[] = [
@@ -2496,6 +2546,11 @@ function MeetupTab() {
                   <p className="mt-1 text-3xl font-bold text-emerald-900">{result.maxKm.toFixed(1)} km</p>
                 </div>
               </div>
+
+              <p className="rounded-xl bg-indigo-50 px-3.5 py-2.5 text-sm text-indigo-800">
+                ⚖️ Fair split: everyone travels between <b>{result.minKm.toFixed(1)} km</b> and{" "}
+                <b>{result.maxKm.toFixed(1)} km</b> (gap {result.gapKm.toFixed(1)} km).
+              </p>
 
               <div className="rounded-xl bg-slate-50 p-3.5 text-sm">
                 <p className="font-semibold text-slate-800">Recommended coordinates</p>
