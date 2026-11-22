@@ -563,6 +563,20 @@ export async function POST(request: NextRequest) {
   }
 
   try {
+    // Additional AI tools for Novus tabs (API key stays on the server).
+    if (["spending", "flashcards", "visual"].includes(body?.action)) {
+      const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+      if (!apiKey) return NextResponse.json({ error: "AI is not configured. Add GEMINI_API_KEY to your environment." }, { status: 503 });
+      const ai = new GoogleGenAI({ apiKey });
+      const action = body.action;
+      let prompt = "";
+      if (action === "spending") prompt = `You are a supportive student budgeting coach. Analyze these spending records and budget. Give practical, nonjudgmental observations, totals/category patterns, potential savings, and a realistic next step. Do not claim financial certainty. Data: ${JSON.stringify(body.data ?? {})}`;
+      if (action === "flashcards") prompt = `Create 8 concise study flashcards from the supplied topic and notes. Return ONLY a JSON array of objects with question, answer, and topic string fields. Do not invent facts beyond notes if notes are provided; if only topic is provided, use standard educational knowledge. Topic: ${String(body.topic ?? "").slice(0,200)}. Notes: ${String(body.notes ?? "").slice(0,7000)}`;
+      if (action === "visual") prompt = `You are an electronics/digital-circuits tutor. Explain the concept in the context supplied. Be accurate, clear, student-friendly, use step-by-step reasoning in a concise way, and include equations or a small example where useful. Context: ${String(body.context ?? "").slice(0,3000)}. Question: ${String(body.question ?? "Explain this concept").slice(0,1000)}`;
+      const response = await withTimeout(ai.models.generateContent({ model: MODEL, contents: prompt, config: { temperature: action === "flashcards" ? 0.3 : 0.5 } }), GEMINI_TIMEOUT_MS);
+      return NextResponse.json({ result: response.text ?? "No response generated." });
+    }
+
     const schoolInfo =
       typeof body?.schoolInfo === "string" ? body.schoolInfo.trim() : "";
 
