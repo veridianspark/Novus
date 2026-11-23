@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 
 /* ==================================================
    TYPES & CONSTANTS
@@ -8,8 +8,22 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 type Priority = "High" | "Medium" | "Low";
 
-type Expense = { id: number; title: string; amount: number; category: string; date: string; };
-const EXPENSE_CATEGORIES = ["Food", "Transport", "Education", "Shopping", "Entertainment", "Other"];
+type Expense = {
+  id: number;
+  title: string;
+  amount: number;
+  category: string;
+  date: string;
+};
+
+const EXPENSE_CATEGORIES = [
+  "Food",
+  "Transport",
+  "Education",
+  "Shopping",
+  "Entertainment",
+  "Other",
+];
 
 type Task = {
   id: number;
@@ -114,7 +128,7 @@ const MONTH_NAMES = [
 ];
 
 const MONTH_PATTERN =
-  "(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?";
+  "(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\\.?";
 
 const WEEKDAY_PATTERNS: RegExp[] = [
   /\b(sunday|sun)\b/,
@@ -156,10 +170,14 @@ function parseDateText(
 
   /* Month-name dates: "oct 2", "october 2nd, 2026", "2 oct", "2nd of october" */
   const monthFirst = text.match(
-    new RegExp(`\\b${MONTH_PATTERN}\\s+(\\d{1,2})(?:st|nd|rd|th)?(?:,?\\s+(\\d{4}))?\\b`)
+    new RegExp(
+      `\\b${MONTH_PATTERN}\\s+(\\d{1,2})(?:st|nd|rd|th)?(?:,?\\s+(\\d{4}))?\\b`
+    )
   );
   const dayFirst = text.match(
-    new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(?:of\\s+)?${MONTH_PATTERN}(?:,?\\s+(\\d{4}))?\\b`)
+    new RegExp(
+      `\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(?:of\\s+)?${MONTH_PATTERN}(?:,?\\s+(\\d{4}))?\\b`
+    )
   );
 
   let monthIndex: number | null = null;
@@ -341,7 +359,12 @@ type Plan = {
 };
 
 function buildPlan(tasks: Task[], todayKey: string, capacity: number): Plan {
-  const empty: Plan = { days: [], overloadedDates: [], atRiskIds: [], overdueIds: [] };
+  const empty: Plan = {
+    days: [],
+    overloadedDates: [],
+    atRiskIds: [],
+    overdueIds: [],
+  };
   const start = dateFromKey(todayKey);
   if (!start) return empty;
 
@@ -353,7 +376,9 @@ function buildPlan(tasks: Task[], todayKey: string, capacity: number): Plan {
     .map((t) => t.id);
 
   const deadlineOf = (t: Task): string =>
-    (t.scheduledDate as string) < todayKey ? todayKey : (t.scheduledDate as string);
+    (t.scheduledDate as string) < todayKey
+      ? todayKey
+      : (t.scheduledDate as string);
 
   // Earliest deadline first; ties broken by priority.
   const ordered = [...active].sort((a, b) => {
@@ -380,7 +405,9 @@ function buildPlan(tasks: Task[], todayKey: string, capacity: number): Plan {
     if (window.length === 0) window.push(todayKey);
 
     let remaining =
-      task.estimatedMinutes && task.estimatedMinutes > 0 ? task.estimatedMinutes : 30;
+      task.estimatedMinutes && task.estimatedMinutes > 0
+        ? task.estimatedMinutes
+        : 30;
 
     while (remaining > 0) {
       const minutes = Math.min(SESSION_MINUTES, remaining);
@@ -430,12 +457,15 @@ function icsEscape(value: string): string {
 }
 
 function buildICS(tasks: Task[]): string {
-  const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+  const stamp = new Date()
+    .toISOString()
+    .replace(/[-:]/g, "")
+    .replace(/\.\d{3}/, "");
 
   const lines: string[] = [
     "BEGIN:VCALENDAR",
     "VERSION:2.0",
-    "PRODID:-//StudySync//Task export//EN",
+    "PRODID:-//Novus//Task export//EN",
     "CALSCALE:GREGORIAN",
     "METHOD:PUBLISH",
   ];
@@ -450,7 +480,7 @@ function buildICS(tasks: Task[]): string {
 
     lines.push(
       "BEGIN:VEVENT",
-      `UID:studysync-${task.id}-${task.scheduledDate}@studysync`,
+      `UID:novus-${task.id}-${task.scheduledDate}@novus`,
       `DTSTAMP:${stamp}`,
       `DTSTART;VALUE=DATE:${task.scheduledDate.replace(/-/g, "")}`,
       `DTEND;VALUE=DATE:${next.replace(/-/g, "")}`,
@@ -522,7 +552,12 @@ async function resizeImage(
    MEETUP DISTANCE HELPERS
 ================================================== */
 
-function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
+function haversineKm(
+  lat1: number,
+  lon1: number,
+  lat2: number,
+  lon2: number
+): number {
   const toRad = (deg: number) => (deg * Math.PI) / 180;
   const R = 6371;
   const dLat = toRad(lat2 - lat1);
@@ -533,17 +568,6 @@ function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): nu
   return 2 * R * Math.asin(Math.sqrt(a));
 }
 
-/**
- * Finds a FAIR meeting point: the place that keeps the farthest trip as short as
- * possible AND keeps everyone's trip close to the same length.
- *
- * (The old version minimised the AVERAGE distance, which drags the point toward
- * whichever people live close together and makes the outlier travel far.)
- *
- *  1. Start from the minimax centre (smallest circle that covers everyone).
- *  2. Refine with a local search on  cost = 2*max - min,  which punishes both a
- *     long worst trip and a big gap between the longest and shortest trip.
- */
 function computeBestMeetingPoint(
   points: { id: number; name: string; lat: number; lon: number }[]
 ): MeetupResult {
@@ -557,7 +581,6 @@ function computeBestMeetingPoint(
     return 2 * mx - mn;
   };
 
-  // Step 1: minimax centre (Badoiu-Clarkson).
   let lat = points.reduce((s, p) => s + p.lat, 0) / points.length;
   let lon = points.reduce((s, p) => s + p.lon, 0) / points.length;
   for (let i = 1; i <= 2000; i++) {
@@ -574,12 +597,17 @@ function computeBestMeetingPoint(
     lon += (far.lon - lon) / (i + 1);
   }
 
-  // Step 2: pattern search on the fairness cost.
-  let step = 0.05; // degrees (~5 km)
+  let step = 0.05;
   let best = cost(lat, lon);
   const dirs = [
-    [1, 0], [-1, 0], [0, 1], [0, -1],
-    [1, 1], [1, -1], [-1, 1], [-1, -1],
+    [1, 0],
+    [-1, 0],
+    [0, 1],
+    [0, -1],
+    [1, 1],
+    [1, -1],
+    [-1, 1],
+    [-1, -1],
   ];
   for (let iter = 0; iter < 5000 && step > 1e-6; iter++) {
     let improved = false;
@@ -619,2102 +647,535 @@ function computeBestMeetingPoint(
 }
 
 const NOVUS_FLASHCARDS: { topic: string; question: string; answer: string }[] = [
-  { topic: 'AI Foundations', question: 'What is Artificial Intelligence (AI)?', answer: 'The broad concept of creating systems that mimic human intelligence, using algorithms to learn, reason and make decisions.' },
-  { topic: 'AI Foundations', question: 'How does AI work, according to Module 1?', answer: 'It processes large datasets, recognizes patterns and makes decisions using algorithms.' },
-  { topic: 'AI Foundations', question: 'What are the three elements highlighted in AI’s self-improvement process?', answer: 'Learning (from data), reasoning (choosing an approach or algorithm), and self-correction (refining for accuracy).' },
-  { topic: 'AI Foundations', question: 'Name eight foundations of AI.', answer: 'Philosophy, mathematics, economics, neuroscience, psychology, computer engineering, control theory & cybernetics, and linguistics.' },
-  { topic: 'AI Foundations', question: 'What did philosophy contribute to AI?', answer: 'Knowledge, reasoning, logic, formal logical thinking and symbolic reasoning.' },
-  { topic: 'AI Foundations', question: 'What does mathematics contribute to AI?', answer: 'Algorithms, computation, logic, probability, statistics and computability theory.' },
-  { topic: 'AI Foundations', question: 'What does economics contribute to AI?', answer: 'Decision-making ideas including optimization, utility theory, game theory and rational choice.' },
-  { topic: 'AI Foundations', question: 'How did neuroscience influence AI?', answer: 'Study of the brain and neurons inspired artificial neural networks and brain-based learning models.' },
-  { topic: 'AI Foundations', question: 'What did psychology contribute to AI?', answer: 'Understanding human behaviour and learning, including behaviourism, cognitive psychology and learning theories.' },
-  { topic: 'AI Foundations', question: 'What did computer engineering contribute to AI?', answer: 'Hardware, software and computational power needed to implement AI.' },
-  { topic: 'AI Foundations', question: 'What is the contribution of control theory and cybernetics?', answer: 'Feedback systems, self-regulation, goal-driven behaviour and optimization through feedback.' },
-  { topic: 'AI Foundations', question: 'What did linguistics contribute to AI?', answer: 'Language structure, syntax, grammar and language understanding, forming a foundation for NLP.' },
-  { topic: 'AI Foundations', question: 'What are the six components of AI listed in Module 1?', answer: 'Perception, knowledge representation, learning, reasoning, problem solving and natural language processing.' },
-  { topic: 'AI History', question: 'Who proposed the first neural network model in 1943, according to the PDF?', answer: 'Warren McCullough and Walter Pitts.' },
-  { topic: 'AI History', question: 'What is the 1950 AI milestone in Module 1?', answer: 'Alan Turing introduced the Turing Test.' },
-  { topic: 'AI History', question: 'Who coined the term Artificial Intelligence and when?', answer: 'John McCarthy, during the 1956 Dartmouth Conference.' },
-  { topic: 'AI History', question: 'What happened in 1997 in the AI history timeline?', answer: 'IBM Deep Blue defeated chess champion Garry Kasparov.' },
-  { topic: 'AI History', question: 'What AI milestone is associated with 2011?', answer: 'Apple introduced Siri.' },
-  { topic: 'AI Approaches', question: 'What are the four classic approaches to AI?', answer: 'Thinking humanly, thinking rationally, acting humanly and acting rationally.' },
-  { topic: 'AI Approaches', question: 'What is Thinking Humanly?', answer: 'The cognitive-modelling approach: build systems that think like humans and study human thought processes.' },
-  { topic: 'AI Approaches', question: 'What methods are used to study Thinking Humanly?', answer: 'Introspection, psychological experiments and brain imaging.' },
-  { topic: 'AI Approaches', question: 'What is Acting Humanly?', answer: 'The Turing Test approach: build systems whose intelligent behaviour resembles human behaviour.' },
-  { topic: 'AI Approaches', question: 'What capabilities are listed for Acting Humanly?', answer: 'NLP, knowledge representation, automated reasoning, machine learning, computer vision and robotics.' },
-  { topic: 'AI Approaches', question: 'What is Thinking Rationally?', answer: 'The laws-of-thought approach: use formal logic and rules to reason correctly.' },
-  { topic: 'AI Approaches', question: 'Give the medical-rule example of Thinking Rationally from the PDF.', answer: 'If fever AND cough → Flu; if fever AND rash → Measles.' },
-  { topic: 'AI Approaches', question: 'What is Acting Rationally?', answer: 'The rational-agent approach: choose the best possible action toward goals, considering the environment and performance measure.' },
-  { topic: 'AI Agents', question: 'What is an agent?', answer: 'An entity that perceives its environment and performs actions.' },
-  { topic: 'AI Agents', question: 'What is an environment?', answer: 'The external world or situation in which an agent operates.' },
-  { topic: 'AI Agents', question: 'What are sensors and actuators?', answer: 'Sensors receive information from the environment; actuators perform actions on it.' },
-  { topic: 'AI Agents', question: 'What is a percept?', answer: 'Information received by an agent from the environment at a particular moment.' },
-  { topic: 'AI Agents', question: 'What is a percept sequence?', answer: 'The complete history of percepts received by an agent.' },
-  { topic: 'AI Agents', question: 'What is an agent function?', answer: 'A mapping from percept sequences to actions.' },
-  { topic: 'AI Agents', question: 'Agent = ?', answer: 'Architecture + Program.' },
-  { topic: 'AI Agents', question: 'What is an agent program?', answer: 'Software that implements the agent function and decides actions using percepts, sometimes retaining past percepts.' },
-  { topic: 'Rationality', question: 'What is rationality in AI?', answer: 'Choosing the most appropriate action based on the information available to the agent.' },
-  { topic: 'Rationality', question: 'What is a performance measure?', answer: 'A criterion that defines how an agent’s success is judged.' },
-  { topic: 'Rationality', question: 'How is rationality different from omniscience?', answer: 'Omniscience means knowing exact outcomes; rationality means choosing the best action with available information.' },
-  { topic: 'Rationality', question: 'What is limited rationality?', answer: 'Making the best possible decision within available time and computational resources.' },
-  { topic: 'Rationality', question: 'What does probability theory and utility theory contribute to decision theory?', answer: 'Probability theory represents what an agent should believe; utility theory represents what it wants.' },
-  { topic: 'Environment', question: 'What does PEAS stand for?', answer: 'Performance Measure, Environment, Actuators, Sensors.' },
-  { topic: 'Environment', question: 'What is the purpose of PEAS?', answer: 'To specify an intelligent agent’s task environment.' },
-  { topic: 'Environment', question: 'Discrete vs continuous environment?', answer: 'Discrete has limited, well-defined states; continuous has values or states without such discrete limits.' },
-  { topic: 'Environment', question: 'Known vs unknown environment?', answer: 'In a known environment, the agent knows action outcomes; in an unknown one, it may need to learn them.' },
-  { topic: 'Environment', question: 'Observable vs partially observable?', answer: 'Observable: the agent can perceive the complete state; partially observable: it cannot perceive everything.' },
-  { topic: 'Environment', question: 'Static vs dynamic environment?', answer: 'Static does not change while the agent acts; dynamic changes during action.' },
-  { topic: 'Environment', question: 'What is a semi-dynamic environment?', answer: 'The environment itself does not change, but the agent’s performance can change over time.' },
-  { topic: 'Environment', question: 'Single-agent vs multi-agent?', answer: 'Single-agent has one agent; multi-agent has multiple agents that may cooperate or compete.' },
-  { topic: 'Environment', question: 'Deterministic vs non-deterministic?', answer: 'Deterministic: the next state is determined; non-deterministic: outcomes involve uncertainty.' },
-  { topic: 'Environment', question: 'Episodic vs non-episodic?', answer: 'Episodic decisions are independent; non-episodic actions affect future decisions.' },
-  { topic: 'Agent Types', question: 'What are the agent types listed in Module 1?', answer: 'Simple reflex, model-based reflex, goal-based, utility-based and learning-based agents.' },
-  { topic: 'Agent Types', question: 'How does a simple reflex agent choose an action?', answer: 'Using the current percept and condition–action rules, without considering past states.' },
-  { topic: 'Agent Types', question: 'What is a limitation of simple reflex agents?', answer: 'They generally require full observability; in partially observable environments they can get stuck in loops.' },
-  { topic: 'Agent Types', question: 'What is a model-based reflex agent?', answer: 'An agent that uses a model of the world and maintains an internal state to guide actions.' },
-  { topic: 'Machine Learning', question: 'What is Machine Learning?', answer: 'A branch of AI that enables computers to learn patterns from data without being explicitly programmed for every scenario.' },
-  { topic: 'Machine Learning', question: 'How is AI related to ML and Deep Learning?', answer: 'AI is the broader field; ML is a subset of AI; deep learning is a subset of ML using deeper neural networks.' },
-  { topic: 'Machine Learning', question: 'What are four ML characteristics shown in Module 2?', answer: 'Data-driven, adaptive, predictive and automated pattern discovery.' },
-  { topic: 'Machine Learning', question: 'What is Tom Mitchell’s learning definition (E, T, P)?', answer: 'A program learns from experience E with respect to tasks T and performance measure P if its performance at T, measured by P, improves with E.' },
-  { topic: 'Machine Learning', question: 'In Mitchell’s definition, what do E, T and P mean?', answer: 'E = experience; T = task; P = performance measure.' },
-  { topic: 'Machine Learning', question: 'Give the Checkers example for E, T and P.', answer: 'E: playing experience; T: playing checkers; P: percentage of games won.' },
-  { topic: 'Machine Learning', question: 'What are the three basic ML process stages?', answer: 'Data input → abstraction → generalization.' },
-  { topic: 'Machine Learning', question: 'What is abstraction in ML?', answer: 'Converting raw input into a conceptual model that summarizes patterns or relationships.' },
-  { topic: 'Machine Learning', question: 'What can an ML model look like?', answer: 'Rules, equations, trees/graphs or logical groups.' },
-  { topic: 'Machine Learning', question: 'What is generalization?', answer: 'Applying learned patterns to new, unseen data or situations.' },
-  { topic: 'Machine Learning', question: 'What are the three steps of a well-posed learning problem?', answer: 'Define the problem; explain why it needs solving; describe how it could be solved.' },
-  { topic: 'Learning Types', question: 'What is supervised learning?', answer: 'Learning from labelled training examples that include inputs and correct output labels.' },
-  { topic: 'Learning Types', question: 'What is the goal of supervised learning?', answer: 'Train a model to predict or make decisions on new, unseen data.' },
-  { topic: 'Learning Types', question: 'What are the main supervised-learning types?', answer: 'Classification and regression.' },
-  { topic: 'Learning Types', question: 'What is classification?', answer: 'Supervised learning that predicts a predefined category or class.' },
-  { topic: 'Learning Types', question: 'Give classification examples.', answer: 'Spam detection, medical diagnosis categories, weather labels, handwriting recognition and fraud detection.' },
-  { topic: 'Learning Types', question: 'Name classification algorithms listed in Module 2.', answer: 'Naive Bayes, Decision Tree, K-NN, SVM and Logistic Regression.' },
-  { topic: 'Learning Types', question: 'What is regression?', answer: 'Supervised learning used to predict a numerical or continuous value.' },
-  { topic: 'Learning Types', question: 'Simple vs multiple linear regression?', answer: 'Simple regression uses one predictor; multiple regression uses several predictors.' },
-  { topic: 'Learning Types', question: 'What is unsupervised learning?', answer: 'Learning from unlabeled data to discover hidden patterns, groupings or associations.' },
-  { topic: 'Learning Types', question: 'What are two unsupervised-learning techniques in the PDF?', answer: 'Clustering and association analysis.' },
-  { topic: 'Learning Types', question: 'What is clustering?', answer: 'Grouping similar data points based on their features.' },
-  { topic: 'Learning Types', question: 'What is association analysis?', answer: 'Finding relationships between items, often used in market basket analysis.' },
-  { topic: 'Learning Types', question: 'What is reinforcement learning?', answer: 'An agent learns by interacting with an environment, using rewards or penalties to guide actions.' },
-  { topic: 'Learning Types', question: 'Name the reinforcement learning elements.', answer: 'Agent, environment, state, action, reward and policy update.' },
-  { topic: 'Learning Types', question: 'What is the goal of reinforcement learning?', answer: 'Learn a sequence or policy of actions that maximizes total reward.' },
-  { topic: 'ML Applications', question: 'Name three application areas for ML listed in Module 2.', answer: 'Banking and finance, insurance and healthcare.' },
-  { topic: 'ML Tools', question: 'What are the Python libraries listed for ML?', answer: 'NumPy, SciPy, Matplotlib and Scikit-learn.' },
-  { topic: 'ML Tools', question: 'What are some R tools/libraries listed in the PDF?', answer: 'dplyr/plyr, caret, ggplot2, tm, Shiny and R Markdown.' },
-  { topic: 'ML Tools', question: 'What is MATLAB used for in ML?', answer: 'Numerical and matrix computation, built-in ML/statistical functions and parallel or cloud computing support.' },
-  { topic: 'ML Tools', question: 'What are SAS and SPSS used for?', answer: 'Statistical analysis, data management, data mining and advanced analytics.' },
-  { topic: 'ML Tools', question: 'What is Julia noted for in the PDF?', answer: 'Open-source numerical computing and high-performance scientific computation.' },
-  { topic: 'ML Issues', question: 'What is overfitting?', answer: 'A model learns training data and noise too closely, performing well on training data but poorly on new data.' },
-  { topic: 'ML Issues', question: 'How can overfitting be reduced?', answer: 'Use more data, a simpler model or early stopping.' },
-  { topic: 'ML Issues', question: 'What is underfitting?', answer: 'A model is too simple to capture important patterns and performs poorly on both training and testing data.' },
-  { topic: 'ML Issues', question: 'How can underfitting be addressed?', answer: 'Increase model complexity, add features, reduce noise or train longer.' },
-  { topic: 'ML Issues', question: 'What is bias?', answer: 'Error associated with overly simple models; high bias generally leads to underfitting.' },
-  { topic: 'ML Issues', question: 'What is variance?', answer: 'Error from fitting training data and noise too closely; high variance generally leads to overfitting.' },
-  { topic: 'ML Issues', question: 'What is the bias–variance trade-off?', answer: 'Balancing bias and variance to achieve good generalization on unseen data.' },
-  { topic: 'ML Issues', question: 'What does stratified sampling do?', answer: 'Maintains similar class proportions across dataset splits.' },
-  { topic: 'ML Evaluation', question: 'What is the holdout method?', answer: 'Split labelled data into training and testing portions to evaluate supervised-learning performance.' },
-  { topic: 'ML Evaluation', question: 'What training/test proportions are suggested in the PDF?', answer: 'Training: 70–80%; testing: 20–30%.' },
-  { topic: 'ML Evaluation', question: 'What is a confusion matrix?', answer: 'A table comparing predicted classes with actual classes, showing TP, FP, FN and TN.' },
-  { topic: 'ML Evaluation', question: 'Define TP, FP, FN and TN.', answer: 'TP: positive correctly predicted; FP: negative incorrectly predicted positive; FN: positive incorrectly predicted negative; TN: negative correctly predicted.' },
-  { topic: 'ML Evaluation', question: 'What is accuracy?', answer: '(TP + TN) / (TP + TN + FP + FN).' },
-  { topic: 'ML Evaluation', question: 'What is precision?', answer: 'TP / (TP + FP). Of predicted positives, how many are correct.' },
-  { topic: 'ML Evaluation', question: 'What is recall?', answer: 'TP / (TP + FN). Of actual positives, how many are detected.' },
-  { topic: 'ML Evaluation', question: 'What is F1-score?', answer: '2 × precision × recall / (precision + recall).' },
+  { topic: "AI Foundations", question: "What is Artificial Intelligence (AI)?", answer: "The broad concept of creating systems that mimic human intelligence, using algorithms to learn, reason and make decisions." },
+  { topic: "AI Foundations", question: "How does AI work, according to Module 1?", answer: "It processes large datasets, recognizes patterns and makes decisions using algorithms." },
+  { topic: "AI Foundations", question: "What are the three elements highlighted in AI’s self-improvement process?", answer: "Learning (from data), reasoning (choosing an approach or algorithm), and self-correction (refining for accuracy)." },
+  { topic: "AI Foundations", question: "Name eight foundations of AI.", answer: "Philosophy, mathematics, economics, neuroscience, psychology, computer engineering, control theory & cybernetics, and linguistics." },
+  { topic: "AI Foundations", question: "What did philosophy contribute to AI?", answer: "Knowledge, reasoning, logic, formal logical thinking and symbolic reasoning." },
+  { topic: "AI Foundations", question: "What does mathematics contribute to AI?", answer: "Algorithms, computation, logic, probability, statistics and computability theory." },
+  { topic: "AI Foundations", question: "What does economics contribute to AI?", answer: "Decision-making ideas including optimization, utility theory, game theory and rational choice." },
+  { topic: "AI Foundations", question: "How did neuroscience influence AI?", answer: "Study of the brain and neurons inspired artificial neural networks and brain-based learning models." },
+  { topic: "AI Foundations", question: "What did psychology contribute to AI?", answer: "Understanding human behaviour and learning, including behaviourism, cognitive psychology and learning theories." },
+  { topic: "AI Foundations", question: "What did computer engineering contribute to AI?", answer: "Hardware, software and computational power needed to implement AI." },
+  { topic: "AI Foundations", question: "What is the contribution of control theory and cybernetics?", answer: "Feedback systems, self-regulation, goal-driven behaviour and optimization through feedback." },
+  { topic: "AI Foundations", question: "What did linguistics contribute to AI?", answer: "Language structure, syntax, grammar and language understanding, forming a foundation for NLP." },
+  { topic: "AI Foundations", question: "What are the six components of AI listed in Module 1?", answer: "Perception, knowledge representation, learning, reasoning, problem solving and natural language processing." },
+  { topic: "AI History", question: "Who proposed the first neural network model in 1943, according to the PDF?", answer: "Warren McCullough and Walter Pitts." },
+  { topic: "AI History", question: "What is the 1950 AI milestone in Module 1?", answer: "Alan Turing introduced the Turing Test." },
+  { topic: "AI History", question: "Who coined the term Artificial Intelligence and when?", answer: "John McCarthy, during the 1956 Dartmouth Conference." },
+  { topic: "AI History", question: "What happened in 1997 in the AI history timeline?", answer: "IBM Deep Blue defeated chess champion Garry Kasparov." },
+  { topic: "AI History", question: "What AI milestone is associated with 2011?", answer: "Apple introduced Siri." },
+  { topic: "AI Approaches", question: "What are the four classic approaches to AI?", answer: "Thinking humanly, thinking rationally, acting humanly and acting rationally." },
+  { topic: "AI Approaches", question: "What is Thinking Humanly?", answer: "The cognitive-modelling approach: build systems that think like humans and study human thought processes." },
+  { topic: "AI Approaches", question: "What methods are used to study Thinking Humanly?", answer: "Introspection, psychological experiments and brain imaging." },
+  { topic: "AI Approaches", question: "What is Acting Humanly?", answer: "The Turing Test approach: build systems whose intelligent behaviour resembles human behaviour." },
+  { topic: "AI Approaches", question: "What capabilities are listed for Acting Humanly?", answer: "NLP, knowledge representation, automated reasoning, machine learning, computer vision and robotics." },
+  { topic: "AI Approaches", question: "What is Thinking Rationally?", answer: "The laws-of-thought approach: use formal logic and rules to reason correctly." },
+  { topic: "AI Approaches", question: "Give the medical-rule example of Thinking Rationally from the PDF.", answer: "If fever AND cough → Flu; if fever AND rash → Measles." },
+  { topic: "AI Approaches", question: "What is Acting Rationally?", answer: "The rational-agent approach: choose the best possible action toward goals, considering the environment and performance measure." },
+  { topic: "AI Agents", question: "What is an agent?", answer: "An entity that perceives its environment and performs actions." },
+  { topic: "AI Agents", question: "What is an environment?", answer: "The external world or situation in which an agent operates." },
+  { topic: "AI Agents", question: "What are sensors and actuators?", answer: "Sensors receive information from the environment; actuators perform actions on it." },
+  { topic: "AI Agents", question: "What is a percept?", answer: "Information received by an agent from the environment at a particular moment." },
+  { topic: "AI Agents", question: "What is a percept sequence?", answer: "The complete history of percepts received by an agent." },
+  { topic: "AI Agents", question: "What is an agent function?", answer: "A mapping from percept sequences to actions." },
+  { topic: "AI Agents", question: "Agent = ?", answer: "Architecture + Program." },
+  { topic: "AI Agents", question: "What is an agent program?", answer: "Software that implements the agent function and decides actions using percepts, sometimes retaining past percepts." },
+  { topic: "Rationality", question: "What is rationality in AI?", answer: "Choosing the most appropriate action based on the information available to the agent." },
+  { topic: "Rationality", question: "What is a performance measure?", answer: "A criterion that defines how an agent’s success is judged." },
+  { topic: "Rationality", question: "How is rationality different from omniscience?", answer: "Omniscience means knowing exact outcomes; rationality means choosing the best action with available information." },
+  { topic: "Rationality", question: "What is limited rationality?", answer: "Making the best possible decision within available time and computational resources." },
+  { topic: "Rationality", question: "What does probability theory and utility theory contribute to decision theory?", answer: "Probability theory represents what an agent should believe; utility theory represents what it wants." },
+  { topic: "Environment", question: "What does PEAS stand for?", answer: "Performance Measure, Environment, Actuators, Sensors." },
+  { topic: "Environment", question: "What is the purpose of PEAS?", answer: "To specify an intelligent agent’s task environment." },
+  { topic: "Environment", question: "Discrete vs continuous environment?", answer: "Discrete has limited, well-defined states; continuous has values or states without such discrete limits." },
+  { topic: "Environment", question: "Known vs unknown environment?", answer: "In a known environment, the agent knows action outcomes; in an unknown one, it may need to learn them." },
+  { topic: "Environment", question: "Observable vs partially observable?", answer: "Observable: the agent can perceive the complete state; partially observable: it cannot perceive everything." },
+  { topic: "Environment", question: "Static vs dynamic environment?", answer: "Static does not change while the agent acts; dynamic changes during action." },
+  { topic: "Environment", question: "What is a semi-dynamic environment?", answer: "The environment itself does not change, but the agent’s performance can change over time." },
+  { topic: "Environment", question: "Single-agent vs multi-agent?", answer: "Single-agent has one agent; multi-agent has multiple agents that may cooperate or compete." },
+  { topic: "Environment", question: "Deterministic vs non-deterministic?", answer: "Deterministic: the next state is determined; non-deterministic: outcomes involve uncertainty." },
+  { topic: "Environment", question: "Episodic vs non-episodic?", answer: "Episodic decisions are independent; non-episodic actions affect future decisions." },
+  { topic: "Agent Types", question: "What are the agent types listed in Module 1?", answer: "Simple reflex, model-based reflex, goal-based, utility-based and learning-based agents." },
+  { topic: "Agent Types", question: "How does a simple reflex agent choose an action?", answer: "Using the current percept and condition–action rules, without considering past states." },
+  { topic: "Agent Types", question: "What is a limitation of simple reflex agents?", answer: "They generally require full observability; in partially observable environments they can get stuck in loops." },
+  { topic: "Agent Types", question: "What is a model-based reflex agent?", answer: "An agent that uses a model of the world and maintains an internal state to guide actions." },
+  { topic: "Machine Learning", question: "What is Machine Learning?", answer: "A branch of AI that enables computers to learn patterns from data without being explicitly programmed for every scenario." },
+  { topic: "Machine Learning", question: "How is AI related to ML and Deep Learning?", answer: "AI is the broader field; ML is a subset of AI; deep learning is a subset of ML using deeper neural networks." },
+  { topic: "Machine Learning", question: "What are four ML characteristics shown in Module 2?", answer: "Data-driven, adaptive, predictive and automated pattern discovery." },
+  { topic: "Machine Learning", question: "What is a well-posed learning problem (E, T, P)?", answer: "A program learns from experience E with respect to tasks T and performance measure P if its performance at T, measured by P, improves with E." },
+  { topic: "Machine Learning", question: "In the (E, T, P) learning definition, what do E, T and P mean?", answer: "E = experience; T = task; P = performance measure." },
+  { topic: "Machine Learning", question: "Give the Checkers example for E, T and P.", answer: "E: playing experience; T: playing checkers; P: percentage of games won." },
+  { topic: "Machine Learning", question: "What are the three basic ML process stages?", answer: "Data input → abstraction → generalization." },
+  { topic: "Machine Learning", question: "What is abstraction in ML?", answer: "Converting raw input into a conceptual model that summarizes patterns or relationships." },
+  { topic: "Machine Learning", question: "What can an ML model look like?", answer: "Rules, equations, trees/graphs or logical groups." },
+  { topic: "Machine Learning", question: "What is generalization?", answer: "Applying learned patterns to new, unseen data or situations." },
+  { topic: "Machine Learning", question: "What are the three steps of a well-posed learning problem?", answer: "Define the problem; explain why it needs solving; describe how it could be solved." },
+  { topic: "Learning Types", question: "What is supervised learning?", answer: "Learning from labelled training examples that include inputs and correct output labels." },
+  { topic: "Learning Types", question: "What is the goal of supervised learning?", answer: "Train a model to predict or make decisions on new, unseen data." },
+  { topic: "Learning Types", question: "What are the main supervised-learning types?", answer: "Classification and regression." },
+  { topic: "Learning Types", question: "What is classification?", answer: "Supervised learning that predicts a predefined category or class." },
+  { topic: "Learning Types", question: "Give classification examples.", answer: "Spam detection, medical diagnosis categories, weather labels, handwriting recognition and fraud detection." },
+  { topic: "Learning Types", question: "Name classification algorithms listed in Module 2.", answer: "Naive Bayes, Decision Tree, K-NN, SVM and Logistic Regression." },
+  { topic: "Learning Types", question: "What is regression?", answer: "Supervised learning used to predict a numerical or continuous value." },
+  { topic: "Learning Types", question: "Simple vs multiple linear regression?", answer: "Simple regression uses one predictor; multiple regression uses several predictors." },
+  { topic: "Learning Types", question: "What is unsupervised learning?", answer: "Learning from unlabeled data to discover hidden patterns, groupings or associations." },
+  { topic: "Learning Types", question: "What are two unsupervised-learning techniques in the PDF?", answer: "Clustering and association analysis." },
+  { topic: "Learning Types", question: "What is clustering?", answer: "Grouping similar data points based on their features." },
+  { topic: "Learning Types", question: "What is association analysis?", answer: "Finding relationships between items, often used in market basket analysis." },
+  { topic: "Learning Types", question: "What is reinforcement learning?", answer: "An agent learns by interacting with an environment, using rewards or penalties to guide actions." },
+  { topic: "Learning Types", question: "Name the reinforcement learning elements.", answer: "Agent, environment, state, action, reward and policy update." },
+  { topic: "Learning Types", question: "What is the goal of reinforcement learning?", answer: "Learn a sequence or policy of actions that maximizes total reward." },
+  { topic: "ML Applications", question: "Name three application areas for ML listed in Module 2.", answer: "Healthcare diagnostics, financial fraud detection and recommendation systems." },
 ];
 
 /* ==================================================
-   MAIN COMPONENT
+   POMODORO + RAINY WINDOW COMPONENT
 ================================================== */
 
-export default function Home() {
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [loaded, setLoaded] = useState(false);
-  const [activeView, setActiveView] = useState<"dashboard" | "spending" | "flashcards" | "visuals" | "meetup">("dashboard");
-  const [flashcardIndex, setFlashcardIndex] = useState(0);
-  const [flashcardFlipped, setFlashcardFlipped] = useState(false);
-  const [flashcardTopic, setFlashcardTopic] = useState("All topics");
-  const [flashcardOrder, setFlashcardOrder] = useState<number[]>(() => NOVUS_FLASHCARDS.map((_, i) => i));
-  const flashcardTopics = ["All topics", ...Array.from(new Set(NOVUS_FLASHCARDS.map((c) => c.topic)))];
-  const filteredFlashcardIndices = flashcardTopic === "All topics" ? flashcardOrder : flashcardOrder.filter((i) => NOVUS_FLASHCARDS[i].topic === flashcardTopic);
-  const currentFlashcardIndex = filteredFlashcardIndices[Math.min(flashcardIndex, Math.max(0, filteredFlashcardIndices.length - 1))];
+type TimerMode = "focus25" | "focus45" | "shortBreak" | "longBreak";
 
-  const [schoolInfo, setSchoolInfo] = useState("");
-  const [showInput, setShowInput] = useState(false);
-  const [isOrganizing, setIsOrganizing] = useState(false);
-  const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
-  const [image, setImage] = useState<{ data: string; mimeType: string; name: string } | null>(null);
-  const [capacity, setCapacity] = useState(120);
-  const [expenses, setExpenses] = useState<Expense[]>([]);
-  const [monthlyBudget, setMonthlyBudget] = useState(0);
-  const [expenseTitle, setExpenseTitle] = useState("");
-  const [expenseAmount, setExpenseAmount] = useState("");
-  const [expenseCategory, setExpenseCategory] = useState("Food");
-  const [expenseDate, setExpenseDate] = useState(formatDate(new Date()));
-  const [expenseNotice, setExpenseNotice] = useState("");
-  const [spendingAi, setSpendingAi] = useState(""); const [spendingAiLoading, setSpendingAiLoading] = useState(false);
-  const [flashAiTopic, setFlashAiTopic] = useState(""); const [flashAiNotes, setFlashAiNotes] = useState(""); const [flashAiResult, setFlashAiResult] = useState(""); const [flashAiLoading, setFlashAiLoading] = useState(false);
+const POMODORO_MODES: Record<TimerMode, { label: string; minutes: number }> = {
+  focus25: { label: "Pomodoro", minutes: 25 },
+  focus45: { label: "Deep Study", minutes: 45 },
+  shortBreak: { label: "Short Break", minutes: 5 },
+  longBreak: { label: "Long Break", minutes: 15 },
+};
 
-  // Set on the client only, so server and client markup match (no hydration errors).
-  const [todayKey, setTodayKey] = useState("");
-  const [greeting, setGreeting] = useState("Hello");
+const RAINDROPS = Array.from({ length: 48 }, (_, i) => ({
+  id: i,
+  left: `${(i * 19.7) % 100}%`,
+  delay: `${(i * 0.23) % 2.5}s`,
+  duration: `${0.65 + (i % 5) * 0.14}s`,
+  opacity: 0.25 + (i % 4) * 0.12,
+  height: `${18 + (i % 4) * 10}px`,
+}));
 
-  const [calendarMonth, setCalendarMonth] = useState(() => {
-    const today = new Date();
-    return new Date(today.getFullYear(), today.getMonth(), 1);
-  });
+function RainyPomodoroView({
+  tasks,
+  onSessionComplete,
+}: {
+  tasks: Task[];
+  onSessionComplete: (taskId: number | null, minutes: number) => void;
+}) {
+  const [mode, setMode] = useState<TimerMode>("focus25");
+  const [secondsLeft, setSecondsLeft] = useState(POMODORO_MODES.focus25.minutes * 60);
+  const [isRunning, setIsRunning] = useState(false);
+  const [selectedTaskId, setSelectedTaskId] = useState<string>("");
+  const [completedSessions, setCompletedSessions] = useState(0);
+  const [rainAudioOn, setRainAudioOn] = useState(false);
 
-  const nextId = useRef(1);
+  const audioCtxRef = useRef<AudioContext | null>(null);
 
-  function allocateId(): number {
-    const id = nextId.current;
-    nextId.current += 1;
-    return id;
-  }
-
-  /* ==================================================
-     CLIENT-ONLY CLOCK VALUES
-  ================================================== */
+  const selectMode = (nextMode: TimerMode) => {
+    setIsRunning(false);
+    setMode(nextMode);
+    setSecondsLeft(POMODORO_MODES[nextMode].minutes * 60);
+  };
 
   useEffect(() => {
-    const now = new Date();
-    setTodayKey(formatDate(now));
-    setGreeting(getGreeting(now.getHours()));
-  }, []);
-
-  /* ==================================================
-     LOAD TASKS
-  ================================================== */
-
-  useEffect(() => {
-    const now = new Date();
-    let initial: Task[] = createDefaultTasks(now);
-
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-
-      if (saved) {
-        const parsed = JSON.parse(saved);
-
-        if (Array.isArray(parsed)) {
-          initial = parsed.map((task: any, index: number) =>
-            normalizeTask(
-              task,
-              typeof task?.id === "number" ? task.id : index + 1,
-              now
-            )
-          );
-        }
-      }
-    } catch (err) {
-      console.error("Could not load saved tasks:", err);
-    }
-
-    // Guarantee unique ids and make sure new ids never collide with old ones.
-    const seen = new Set<number>();
-    let maxId = 0;
-    for (const task of initial) maxId = Math.max(maxId, task.id);
-    initial = initial.map((task) => {
-      if (seen.has(task.id)) {
-        maxId += 1;
-        task = { ...task, id: maxId };
-      }
-      seen.add(task.id);
-      return task;
-    });
-
-    nextId.current = maxId + 1;
-    setTasks(initial);
-    setLoaded(true);
-  }, []);
-
-  /* ==================================================
-     SAVE TASKS
-  ================================================== */
-
-  useEffect(() => {
-    if (!loaded) return;
-
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
-    } catch (err) {
-      console.error("Could not save tasks:", err);
-    }
-  }, [tasks, loaded]);
-
-  /* ==================================================
-     SPENDING TRACKER PERSISTENCE
-  ================================================== */
-
-  useEffect(() => {
-    try {
-      const savedExpenses = localStorage.getItem(EXPENSE_STORAGE_KEY);
-      if (savedExpenses) {
-        const parsed = JSON.parse(savedExpenses);
-        if (Array.isArray(parsed)) setExpenses(parsed);
-      }
-      const savedBudget = localStorage.getItem(BUDGET_STORAGE_KEY);
-      if (savedBudget !== null) setMonthlyBudget(Math.max(0, Number(savedBudget) || 0));
-    } catch (err) {
-      console.error("Could not load Novus spending data:", err);
-    }
-  }, []);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(EXPENSE_STORAGE_KEY, JSON.stringify(expenses));
-      localStorage.setItem(BUDGET_STORAGE_KEY, String(monthlyBudget));
-    } catch (err) {
-      console.error("Could not save Novus spending data:", err);
-    }
-  }, [expenses, monthlyBudget]);
-
-  function addExpense() {
-    const amount = Number(expenseAmount);
-    if (!expenseTitle.trim() || !Number.isFinite(amount) || amount <= 0 || !expenseDate) {
-      setExpenseNotice("Enter a description, valid amount and date.");
-      return;
-    }
-    setExpenses((current) => [{ id: Date.now(), title: expenseTitle.trim(), amount, category: expenseCategory, date: expenseDate }, ...current]);
-    setExpenseTitle("");
-    setExpenseAmount("");
-    setExpenseNotice("Expense added.");
-  }
-
-  /* ==================================================
-     PROGRESS
-  ================================================== */
-
-  const completedTasks = tasks.filter((task) => task.completed).length;
-
-  const progress =
-    tasks.length === 0 ? 0 : Math.round((completedTasks / tasks.length) * 100);
-
-  /* ==================================================
-     RECOMMENDED TASK
-     Priority first, then earliest date. Undated tasks last.
-  ================================================== */
-
-  const nextTask = useMemo(() => {
-    const incomplete = tasks.filter((task) => !task.completed);
-    if (incomplete.length === 0) return null;
-
-    return [...incomplete].sort((a, b) => {
-      const byPriority = PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority];
-      if (byPriority !== 0) return byPriority;
-
-      const dateA = a.scheduledDate ?? "9999-99-99";
-      const dateB = b.scheduledDate ?? "9999-99-99";
-      return dateA.localeCompare(dateB);
-    })[0];
-  }, [tasks]);
-
-  /* ==================================================
-     STUDY PLAN
-  ================================================== */
-
-  useEffect(() => {
-    try {
-      const saved = Number(localStorage.getItem(CAPACITY_KEY));
-      if (CAPACITY_OPTIONS.includes(saved)) setCapacity(saved);
-    } catch {
-      // ignore storage problems
-    }
-  }, []);
-
-  function changeCapacity(value: number) {
-    setCapacity(value);
-    try {
-      localStorage.setItem(CAPACITY_KEY, String(value));
-    } catch {
-      // ignore storage problems
-    }
-  }
-
-  const plan = useMemo(
-    () => (todayKey ? buildPlan(tasks, todayKey, capacity) : null),
-    [tasks, todayKey, capacity]
-  );
-
-  const todayItems = useMemo(() => {
-    const day = plan?.days.find((d) => d.date === todayKey);
-    if (!day) return [] as { task: Task; minutes: number }[];
-
-    const merged = new Map<number, number>();
-    for (const session of day.sessions) {
-      merged.set(session.taskId, (merged.get(session.taskId) ?? 0) + session.minutes);
-    }
-
-    const items: { task: Task; minutes: number }[] = [];
-    merged.forEach((minutes, taskId) => {
-      const task = tasks.find((t) => t.id === taskId);
-      if (task) items.push({ task, minutes });
-    });
-    return items;
-  }, [plan, tasks, todayKey]);
-
-  const todayMinutes = todayItems.reduce((sum, item) => sum + item.minutes, 0);
-
-  const weekView = useMemo(() => {
-    const start = todayKey ? dateFromKey(todayKey) : null;
-    if (!start || !plan) return [] as { key: string; label: string; minutes: number }[];
-
-    return Array.from({ length: 7 }, (_, i) => {
-      const d = addDays(start, i);
-      const key = formatDate(d);
-      const day = plan.days.find((x) => x.date === key);
-      return {
-        key,
-        label: i === 0 ? "Today" : d.toLocaleDateString("en-US", { weekday: "short" }),
-        minutes: day?.minutes ?? 0,
-      };
-    });
-  }, [plan, todayKey]);
-
-  const planWarnings = useMemo(() => {
-    const out: string[] = [];
-    if (!plan) return out;
-
-    const title = (id: number) => tasks.find((t) => t.id === id)?.title ?? "A task";
-
-    if (plan.overdueIds.length > 0) {
-      out.push(`Overdue: ${plan.overdueIds.map(title).join(", ")}`);
-    }
-
-    for (const date of plan.overloadedDates) {
-      const day = plan.days.find((d) => d.date === date);
-      const d = dateFromKey(date);
-      const label = d
-        ? d.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" })
-        : date;
-      out.push(`${label} is overloaded: ${day?.minutes ?? 0} min planned (your limit is ${capacity}).`);
-    }
-
-    if (plan.atRiskIds.length > 0) {
-      out.push(
-        `These may not fit before their deadlines: ${plan.atRiskIds.map(title).join(", ")}. Start earlier or raise your daily study time.`
-      );
-    }
-
-    return out;
-  }, [plan, tasks, capacity]);
-
-  const hasPlannableTasks = tasks.some((t) => !t.completed && t.scheduledDate);
-
-  function exportCalendar() {
-    const ics = buildICS(tasks);
-
-    if (!ics.includes("BEGIN:VEVENT")) {
-      setNotice("There are no upcoming dated tasks to export yet.");
-      return;
-    }
-
-    const blob = new Blob([ics], { type: "text/calendar;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = "studysync-tasks.ics";
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    URL.revokeObjectURL(url);
-
-    setNotice(
-      "Calendar file downloaded. Open it to add your deadlines, with reminders, to Google or Apple Calendar."
-    );
-  }
-
-  async function handleFile(file: File | null | undefined) {
-    if (!file) return;
-    setError("");
-
-    try {
-      if (file.type.startsWith("image/")) {
-        if (file.size > 15 * 1024 * 1024) {
-          throw new Error("That image is too large. Try a smaller screenshot.");
-        }
-        const { base64, mimeType } = await resizeImage(file);
-        setImage({ data: base64, mimeType, name: file.name || "Pasted screenshot" });
-      } else if (file.type === "text/plain" || file.name.toLowerCase().endsWith(".txt")) {
-        const text = await file.text();
-        // Chat exports are long and the latest messages matter most.
-        setSchoolInfo(text.slice(-7500).trim());
-      } else {
-        throw new Error("Please add a screenshot (JPG or PNG) or a .txt chat export.");
-      }
-    } catch (err: any) {
-      setError(err?.message || "Could not read that file.");
-    }
-  }
-
-  /* ==================================================
-     TASK ACTIONS
-  ================================================== */
-
-  function toggleTask(id: number) {
-    setTasks((current) =>
-      current.map((task) =>
-        task.id === id ? { ...task, completed: !task.completed } : task
-      )
-    );
-  }
-
-  function removeTask(id: number) {
-    setTasks((current) => current.filter((task) => task.id !== id));
-  }
-
-  function goTo(id: string) {
-    setActiveView("dashboard");
-    setTimeout(() => {
-      document.getElementById(id)?.scrollIntoView({
-        behavior: "smooth",
-        block: "start",
-      });
-    }, 0);
-  }
-
-  /* ==================================================
-     ORGANIZE WITH AI
-  ================================================== */
-
-  async function organizeTasks() {
-    if (!schoolInfo.trim() && !image) {
-      setError("Paste some school information or add a screenshot first.");
-      return;
-    }
-
-    setError("");
-    setNotice("");
-    setIsOrganizing(true);
-
-    try {
-      const response = await fetch("/api/organise", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          schoolInfo: schoolInfo.trim(),
-          image: image ? { data: image.data, mimeType: image.mimeType } : undefined,
-          // The server runs in UTC, so tell it the student's local date.
-          today: formatDate(new Date()),
-        }),
-      });
-
-      let data: any = null;
-      try {
-        data = await response.json();
-      } catch {
-        throw new Error("The server sent back something unreadable. Try again.");
-      }
-
-      if (!response.ok) {
-        throw new Error(
-          data?.error || "Something went wrong while organizing your work."
-        );
-      }
-
-      if (!Array.isArray(data?.tasks)) {
-        throw new Error("The AI returned an invalid task list.");
-      }
-
-      const now = new Date();
-
-      const incoming: Task[] = data.tasks.map((raw: any) =>
-        normalizeTask(raw, allocateId(), now)
-      );
-
-      // Remove duplicates against existing tasks AND within the incoming batch.
-      let addedCount = 0;
-      let firstNewDate: string | undefined;
-
-      setTasks((current) => {
-        const existing = new Set(current.map(taskKey));
-        const fresh: Task[] = [];
-
-        for (const task of incoming) {
-          const key = taskKey(task);
-          if (existing.has(key)) continue;
-          existing.add(key);
-          fresh.push(task);
-        }
-
-        addedCount = fresh.length;
-        firstNewDate = fresh.find((task) => task.scheduledDate)?.scheduledDate;
-
-        return [...current, ...fresh];
-      });
-
-      setSchoolInfo("");
-      setImage(null);
-      setShowInput(false);
-
-      // Jump the calendar to the earliest new dated task.
-      const earliest = [...incoming]
-        .map((task) => task.scheduledDate)
-        .filter((value): value is string => Boolean(value))
-        .sort()[0];
-
-      const target = earliest ?? firstNewDate;
-      const targetDate = target ? dateFromKey(target) : null;
-
-      if (targetDate) {
-        setCalendarMonth(
-          new Date(targetDate.getFullYear(), targetDate.getMonth(), 1)
-        );
-      }
-
-      setNotice(
-        incoming.length === 0
-          ? "No tasks were found in that text."
-          : data.fallback
-          ? "The AI was unavailable, so tasks were added with basic parsing. Double-check the subjects and dates."
-          : "Tasks added. Anything that already existed was skipped."
-      );
-    } catch (err: any) {
-      console.error("Novus AI error:", err);
-      setError(
-        err?.message ||
-          "Could not organize your schoolwork. Please try again."
-      );
-    } finally {
-      setIsOrganizing(false);
-    }
-  }
-
-  /* ==================================================
-     CALENDAR
-  ================================================== */
-
-  const calendarDays = useMemo(() => {
-    const firstDay = new Date(
-      calendarMonth.getFullYear(),
-      calendarMonth.getMonth(),
-      1
-    );
-
-    const start = getStartOfWeek(firstDay);
-    const days: Date[] = [];
-
-    for (let i = 0; i < 42; i++) {
-      days.push(addDays(start, i));
-    }
-
-    return days;
-  }, [calendarMonth]);
-
-  const tasksByDate = useMemo(() => {
-    const map: Record<string, Task[]> = {};
-
-    for (const task of tasks) {
-      if (!task.scheduledDate) continue;
-
-      if (!map[task.scheduledDate]) {
-        map[task.scheduledDate] = [];
-      }
-
-      map[task.scheduledDate].push(task);
-    }
-
-    return map;
-  }, [tasks]);
-
-  const unscheduledTasks = useMemo(
-    () => tasks.filter((task) => !task.scheduledDate),
-    [tasks]
-  );
-
-  // Tasks shown in the list: dated ones by date, undated ones last.
-  const sortedTasks = useMemo(() => {
-    return [...tasks].sort((a, b) => {
-      if (a.completed !== b.completed) return a.completed ? 1 : -1;
-      const dateA = a.scheduledDate ?? "9999-99-99";
-      const dateB = b.scheduledDate ?? "9999-99-99";
-      const byDate = dateA.localeCompare(dateB);
-      if (byDate !== 0) return byDate;
-      return PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority];
-    });
-  }, [tasks]);
-
-  const monthName = calendarMonth.toLocaleDateString("en-US", {
-    month: "long",
-    year: "numeric",
-  });
-
-  function previousMonth() {
-    setCalendarMonth(
-      (current) => new Date(current.getFullYear(), current.getMonth() - 1, 1)
-    );
-  }
-
-  function nextMonth() {
-    setCalendarMonth(
-      (current) => new Date(current.getFullYear(), current.getMonth() + 1, 1)
-    );
-  }
-
-  function todayMonth() {
-    const today = new Date();
-    setCalendarMonth(new Date(today.getFullYear(), today.getMonth(), 1));
-  }
-
-  /* ==================================================
-     RENDER
-  ================================================== */
-
-  if (!loaded) {
-    return (
-      <main className="flex min-h-screen items-center justify-center bg-[#f7f8fc] text-slate-500">
-        Loading your schoolwork…
-      </main>
-    );
-  }
-
-  const navItems: ["dashboard" | "spending" | "flashcards" | "visuals" | "meetup", string][] = [
-    ["dashboard", "Dashboard"],
-    ["spending", "Spending"],
-    ["flashcards", "Flashcards"],
-    ["visuals", "Visual Lab"],
-    ["meetup", "Meetup"],
-  ];
-
-  return (
-    <main className="min-h-screen bg-[#f7f8fc] text-slate-900">
-      {/* NAVIGATION */}
-
-      <nav className="sticky top-0 z-50 border-b border-slate-200 bg-white/95 backdrop-blur">
-        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-6 py-4">
-          <button
-            onClick={() => goTo("dashboard")}
-            className="flex items-center gap-3 text-left"
-          >
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-900 text-lg font-bold text-white">
-              S
-            </div>
-
-            <div>
-              <h1 className="text-lg font-bold tracking-tight">Novus</h1>
-              <p className="text-xs text-slate-500">Your life, organized.</p>
-            </div>
-          </button>
-
-          <div className="flex flex-wrap items-center gap-4 text-sm font-medium sm:gap-6">
-            {navItems.map(([id, label]) => (
-              <button
-                key={id}
-                onClick={() => setActiveView(id)}
-                className={`transition ${
-                  activeView === id
-                    ? "font-semibold text-indigo-600"
-                    : "text-slate-600 hover:text-indigo-600"
-                }`}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-
-          <div className="hidden h-10 w-10 items-center justify-center rounded-full bg-indigo-100 font-semibold text-indigo-700 sm:flex">
-            S
-          </div>
-        </div>
-      </nav>
-
-      <div className="mx-auto max-w-7xl px-6 py-10">
-        {activeView === "dashboard" && (
-          <>
-            {/* ==================================================
-                DASHBOARD
-            ================================================== */}
-
-            <section id="dashboard" className="scroll-mt-28">
-              <div className="mb-8">
-                <div className="flex flex-col justify-between gap-5 md:flex-row md:items-end">
-                  <div>
-                    <p className="mb-2 text-sm font-semibold uppercase tracking-wider text-indigo-600">
-                      Student dashboard
-                    </p>
-
-                    <h2 className="text-4xl font-bold tracking-tight text-slate-950 sm:text-5xl">
-                      {greeting} 👋
-                    </h2>
-
-                    <p className="mt-3 max-w-2xl text-lg text-slate-500">
-                      Here&apos;s what needs your attention today.
-                    </p>
-                  </div>
-
-                  <button
-                    onClick={() => {
-                      setShowInput(!showInput);
-                      setError("");
-                      setNotice("");
-                    }}
-                    className="rounded-xl bg-slate-900 px-5 py-3 font-semibold text-white shadow-sm transition hover:-translate-y-0.5 hover:bg-slate-800"
-                  >
-                    + Add schoolwork
-                  </button>
-                </div>
-              </div>
-
-              {notice && !showInput && (
-                <div
-                  role="status"
-                  className="mb-6 flex items-center justify-between rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700"
-                >
-                  <span>{notice}</span>
-                  <button
-                    onClick={() => setNotice("")}
-                    aria-label="Dismiss message"
-                    className="ml-4 font-bold"
-                  >
-                    ✕
-                  </button>
-                </div>
-              )}
-
-              {/* AI INPUT */}
-
-              {showInput && (
-                <section className="mb-8 overflow-hidden rounded-2xl border border-indigo-100 bg-white shadow-sm">
-                  <div className="border-b border-slate-100 px-6 py-5">
-                    <p className="text-lg font-bold">Add school information</p>
-
-                    <p className="mt-1 text-sm text-slate-500">
-                      Paste text, or add a screenshot or photo of a chat, notice or
-                      timetable. Novus will organize it for you.
-                    </p>
-                  </div>
-
-                  <div className="p-6">
-                    <textarea
-                      value={schoolInfo}
-                      onChange={(event) => {
-                        setSchoolInfo(event.target.value);
-                        setError("");
-                      }}
-                      onPaste={(event) => {
-                        const file = Array.from(event.clipboardData.files).find((f) =>
-                          f.type.startsWith("image/")
-                        );
-                        if (file) {
-                          event.preventDefault();
-                          void handleFile(file);
-                        }
-                      }}
-                      placeholder={`Example:
-
-Math worksheet 4 due Thursday.
-Bio quiz Friday on chapter 7.
-Don't forget your lab coat tomorrow.
-History presentation due Monday.`}
-                      className="min-h-40 w-full resize-none rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm outline-none transition placeholder:text-slate-400 focus:border-indigo-400 focus:bg-white focus:ring-4 focus:ring-indigo-50"
-                    />
-
-                    <div className="mt-3 flex flex-wrap items-center gap-3">
-                      <label className="cursor-pointer rounded-xl border border-dashed border-indigo-300 bg-indigo-50 px-4 py-2 text-sm font-semibold text-indigo-700 transition hover:bg-indigo-100">
-                        📷 Add screenshot or chat export
-                        <input
-                          type="file"
-                          accept="image/*,.txt,text/plain"
-                          className="hidden"
-                          onChange={(event) => {
-                            void handleFile(event.target.files?.[0]);
-                            event.target.value = "";
-                          }}
-                        />
-                      </label>
-
-                      {image && (
-                        <span className="inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1.5 text-xs text-slate-600">
-                          🖼️ {image.name}
-                          <button
-                            onClick={() => setImage(null)}
-                            aria-label="Remove image"
-                            className="font-bold text-slate-400 hover:text-red-500"
-                          >
-                            ✕
-                          </button>
-                        </span>
-                      )}
-
-                      <span className="text-xs text-slate-400">
-                        or press Ctrl+V to paste a screenshot
-                      </span>
-                    </div>
-
-                    {error && (
-                      <div
-                        role="alert"
-                        className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
-                      >
-                        ⚠️ {error}
-                      </div>
-                    )}
-
-                    <div className="mt-4 flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
-                      <p className="text-xs text-slate-400">
-                        ✨ AI will identify deadlines, subjects, and priorities.
-                      </p>
-
-                      <button
-                        onClick={organizeTasks}
-                        disabled={(!schoolInfo.trim() && !image) || isOrganizing}
-                        className="rounded-xl bg-indigo-600 px-6 py-3 font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        {isOrganizing ? "✨ Organizing..." : "✨ Organize with AI"}
-                      </button>
-                    </div>
-                  </div>
-                </section>
-              )}
-
-              {/* TOP CARDS */}
-
-              <section className="grid gap-5 lg:grid-cols-3">
-                {/* NEXT TASK */}
-
-                <div className="relative overflow-hidden rounded-2xl bg-slate-950 p-6 text-white shadow-lg lg:col-span-2">
-                  <div className="absolute -right-16 -top-16 h-40 w-40 rounded-full bg-indigo-500/20 blur-2xl" />
-
-                  <div className="relative">
-                    <div className="mb-6 flex items-center justify-between">
-                      <div>
-                        <p className="text-sm font-medium text-slate-400">
-                          WHAT SHOULD I DO NOW?
-                        </p>
-
-                        <p className="mt-1 text-xs text-slate-500">
-                          Highest priority first, then earliest date
-                        </p>
-                      </div>
-
-                      <span className="rounded-full bg-red-500/15 px-3 py-1 text-xs font-bold text-red-300">
-                        🔥 NEXT UP
-                      </span>
-                    </div>
-
-                    {nextTask ? (
-                      <>
-                        <h3 className="text-2xl font-bold sm:text-3xl">
-                          {nextTask.title}
-                        </h3>
-
-                        <div className="mt-4 flex flex-wrap gap-2">
-                          <span className="rounded-full bg-white/10 px-3 py-1.5 text-sm text-slate-300">
-                            {nextTask.subject}
-                          </span>
-
-                          <span className="rounded-full bg-white/10 px-3 py-1.5 text-sm text-slate-300">
-                            Due {nextTask.due}
-                          </span>
-
-                          {!!nextTask.estimatedMinutes && (
-                            <span className="rounded-full bg-white/10 px-3 py-1.5 text-sm text-slate-300">
-                              ~{nextTask.estimatedMinutes} min
-                            </span>
-                          )}
-                        </div>
-
-                        {nextTask.reason && (
-                          <p className="mt-4 max-w-xl text-sm leading-6 text-slate-400">
-                            {nextTask.reason}
-                          </p>
-                        )}
-
-                        <div className="mt-6 flex items-center justify-between border-t border-white/10 pt-5">
-                          <div>
-                            <p className="text-sm text-slate-400">Recommended</p>
-                            <p className="font-semibold">Start with this task</p>
-                          </div>
-
-                          <button
-                            onClick={() => toggleTask(nextTask.id)}
-                            className="rounded-xl bg-white px-4 py-2.5 text-sm font-bold text-slate-900 transition hover:bg-slate-100"
-                          >
-                            Mark done ✓
-                          </button>
-                        </div>
-                      </>
-                    ) : (
-                      <div>
-                        <h3 className="text-2xl font-bold">
-                          You&apos;re all caught up! 🎉
-                        </h3>
-
-                        <p className="mt-2 text-slate-400">
-                          Nothing urgent needs your attention.
-                        </p>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {/* PROGRESS */}
-
-                <div
-                  id="progress"
-                  className="scroll-mt-28 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm"
-                >
-                  <p className="text-sm font-semibold text-slate-500">
-                    OVERALL PROGRESS
-                  </p>
-
-                  <div className="mt-6 flex items-end justify-between">
-                    <span className="text-5xl font-bold tracking-tight">
-                      {progress}%
-                    </span>
-
-                    <span className="pb-1 text-sm text-slate-400">
-                      {completedTasks}/{tasks.length} complete
-                    </span>
-                  </div>
-
-                  <div
-                    className="mt-6 h-3 overflow-hidden rounded-full bg-slate-100"
-                    role="progressbar"
-                    aria-valuenow={progress}
-                    aria-valuemin={0}
-                    aria-valuemax={100}
-                  >
-                    <div
-                      className="h-full rounded-full bg-indigo-600 transition-all duration-500"
-                      style={{ width: `${progress}%` }}
-                    />
-                  </div>
-
-                  <p className="mt-4 text-sm text-slate-500">
-                    {tasks.length === 0
-                      ? "Add some schoolwork to start tracking."
-                      : progress >= 100
-                      ? "Amazing work. Everything is done!"
-                      : "Keep going. Small progress adds up."}
-                  </p>
-                </div>
-              </section>
-            </section>
-
-            {/* ==================================================
-                STUDY PLAN
-            ================================================== */}
-
-            <section id="plan" className="mt-12 scroll-mt-28">
-              <div className="mb-5 flex flex-col justify-between gap-3 sm:flex-row sm:items-end">
-                <div>
-                  <h3 className="text-2xl font-bold">Your study plan</h3>
-                  <p className="mt-1 text-sm text-slate-500">
-                    Work is spread over the days before each deadline so no single day gets crushed.
-                  </p>
-                </div>
-
-                <div className="flex flex-wrap items-center gap-3">
-                  <label className="flex items-center gap-2 text-sm text-slate-500">
-                    Study time per day
-                    <select
-                      value={capacity}
-                      onChange={(event) => changeCapacity(Number(event.target.value))}
-                      className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm font-semibold text-slate-700"
-                    >
-                      {CAPACITY_OPTIONS.map((minutes) => (
-                        <option key={minutes} value={minutes}>
-                          {minutes} min
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-
-                  <button
-                    onClick={exportCalendar}
-                    className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold transition hover:bg-slate-50"
-                  >
-                    📅 Add to my calendar (.ics)
-                  </button>
-                </div>
-              </div>
-
-              {!hasPlannableTasks ? (
-                <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-500">
-                  Add some schoolwork with deadlines and your daily plan will appear here.
-                </div>
-              ) : (
-                <div className="space-y-5">
-                  {planWarnings.length > 0 && (
-                    <div
-                      role="status"
-                      className="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-800"
-                    >
-                      <p className="font-bold">⚠️ Heads up</p>
-                      <ul className="mt-2 list-disc space-y-1 pl-5">
-                        {planWarnings.map((warning) => (
-                          <li key={warning}>{warning}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-
-                  <div className="grid gap-5 lg:grid-cols-5">
-                    <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm lg:col-span-2">
-                      <div className="flex items-baseline justify-between">
-                        <p className="text-sm font-semibold text-slate-500">TODAY</p>
-                        <p className="text-sm text-slate-400">{todayMinutes} min planned</p>
-                      </div>
-
-                      {todayItems.length === 0 ? (
-                        <p className="mt-4 text-sm text-slate-500">
-                          Nothing is planned for today. Enjoy the breathing room.
-                        </p>
-                      ) : (
-                        <ul className="mt-4 space-y-3">
-                          {todayItems.map(({ task, minutes }) => (
-                            <li
-                              key={task.id}
-                              className="flex items-center justify-between gap-3 rounded-xl bg-slate-50 p-3"
-                            >
-                              <div>
-                                <p className="text-sm font-semibold">{task.title}</p>
-                                <p className="text-xs text-slate-400">
-                                  {task.subject} • {minutes} min today • due {task.due}
-                                </p>
-                              </div>
-                              <button
-                                onClick={() => toggleTask(task.id)}
-                                className="shrink-0 rounded-full bg-white px-3 py-1.5 text-xs font-bold shadow-sm ring-1 ring-slate-200 hover:bg-indigo-50"
-                              >
-                                Done
-                              </button>
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-                    </div>
-
-                    <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm lg:col-span-3">
-                      <p className="text-sm font-semibold text-slate-500">NEXT 7 DAYS</p>
-                      <p className="mt-1 text-xs text-slate-400">
-                        Bar height shows planned minutes against your {capacity} min limit. Red means overloaded.
-                      </p>
-
-                      <div className="mt-5 grid grid-cols-7 gap-2">
-                        {weekView.map((day) => {
-                          const percent = Math.min(100, Math.round((day.minutes / capacity) * 100));
-                          const over = day.minutes > capacity;
-
-                          return (
-                            <div key={day.key} className="flex flex-col items-center gap-2">
-                              <div className="flex h-28 w-full items-end overflow-hidden rounded-lg bg-slate-100">
-                                <div
-                                  className={`w-full transition-all ${over ? "bg-red-400" : "bg-indigo-500"}`}
-                                  style={{ height: `${percent}%` }}
-                                />
-                              </div>
-                              <p className="text-xs font-semibold text-slate-600">{day.label}</p>
-                              <p className="text-[11px] text-slate-400">{day.minutes} min</p>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </section>
-
-            {/* ==================================================
-                TASKS
-            ================================================== */}
-
-            <section id="tasks" className="mt-12 scroll-mt-28">
-              <div className="mb-5 flex items-center justify-between">
-                <div>
-                  <h3 className="text-2xl font-bold">Your schoolwork</h3>
-                  <p className="mt-1 text-sm text-slate-500">
-                    Everything in one place.
-                  </p>
-                </div>
-
-                <span className="rounded-full bg-white px-3 py-1.5 text-sm font-medium text-slate-500 shadow-sm ring-1 ring-slate-200">
-                  {tasks.length} {tasks.length === 1 ? "task" : "tasks"}
-                </span>
-              </div>
-
-              {tasks.length === 0 ? (
-                <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center">
-                  <div className="text-4xl">📚</div>
-
-                  <h4 className="mt-4 font-bold">No schoolwork yet</h4>
-
-                  <p className="mt-2 text-sm text-slate-500">
-                    Add an assignment or announcement to get started.
-                  </p>
-
-                  <button
-                    onClick={() => setShowInput(true)}
-                    className="mt-5 rounded-xl bg-indigo-600 px-5 py-3 font-semibold text-white hover:bg-indigo-700"
-                  >
-                    Add schoolwork
-                  </button>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {sortedTasks.map((task) => (
-                    <TaskCard
-                      key={task.id}
-                      task={task}
-                      overdue={
-                        !task.completed &&
-                        !!task.scheduledDate &&
-                        !!todayKey &&
-                        task.scheduledDate < todayKey
-                      }
-                      onToggle={() => toggleTask(task.id)}
-                      onRemove={() => removeTask(task.id)}
-                    />
-                  ))}
-                </div>
-              )}
-            </section>
-
-            {/* ==================================================
-                CALENDAR
-            ================================================== */}
-
-            <section
-              id="calendar"
-              className="mt-12 scroll-mt-28 rounded-2xl border border-slate-200 bg-white shadow-sm"
-            >
-              <div className="border-b border-slate-200 p-5 sm:p-6">
-                <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                  <div>
-                    <p className="text-xs font-bold uppercase tracking-widest text-indigo-600">
-                      Your schedule
-                    </p>
-
-                    <h3 className="mt-1 text-2xl font-bold">{monthName}</h3>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={todayMonth}
-                      className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold hover:bg-slate-50"
-                    >
-                      Today
-                    </button>
-
-                    <button
-                      onClick={previousMonth}
-                      aria-label="Previous month"
-                      className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 text-lg hover:bg-slate-50"
-                    >
-                      ←
-                    </button>
-
-                    <button
-                      onClick={nextMonth}
-                      aria-label="Next month"
-                      className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 text-lg hover:bg-slate-50"
-                    >
-                      →
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              <div className="p-3 sm:p-5">
-                {/* WEEKDAYS */}
-
-                <div className="grid grid-cols-7 border-b border-slate-100 pb-2">
-                  {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((day) => (
-                    <div
-                      key={day}
-                      className="py-2 text-center text-xs font-bold uppercase tracking-wide text-slate-400"
-                    >
-                      {day}
-                    </div>
-                  ))}
-                </div>
-
-                {/* DAYS */}
-
-                <div className="grid grid-cols-7">
-                  {calendarDays.map((date) => {
-                    const dateKey = formatDate(date);
-
-                    const isCurrentMonth =
-                      date.getMonth() === calendarMonth.getMonth() &&
-                      date.getFullYear() === calendarMonth.getFullYear();
-
-                    const isToday = dateKey === todayKey;
-                    const dayTasks = tasksByDate[dateKey] || [];
-
-                    return (
-                      <div
-                        key={dateKey}
-                        className={`min-h-28 min-w-0 border-b border-r border-slate-100 p-1.5 sm:min-h-32 sm:p-2 ${
-                          isCurrentMonth ? "bg-white" : "bg-slate-50/60"
-                        }`}
-                      >
-                        <div
-                          className={`mb-1 flex h-7 w-7 items-center justify-center rounded-full text-xs font-semibold ${
-                            isToday
-                              ? "bg-indigo-600 text-white"
-                              : isCurrentMonth
-                              ? "text-slate-700"
-                              : "text-slate-300"
-                          }`}
-                        >
-                          {date.getDate()}
-                        </div>
-
-                        <div className="space-y-1">
-                          {dayTasks.map((task) => (
-                            <button
-                              key={task.id}
-                              onClick={() => toggleTask(task.id)}
-                              title={`${task.title} — click to ${
-                                task.completed ? "mark incomplete" : "mark complete"
-                              }`}
-                              className={`w-full break-words rounded-lg p-1.5 text-left text-[10px] font-semibold transition sm:text-xs ${
-                                task.completed
-                                  ? "bg-slate-100 text-slate-400 line-through"
-                                  : task.priority === "High"
-                                  ? "bg-red-50 text-red-700 hover:bg-red-100"
-                                  : task.priority === "Medium"
-                                  ? "bg-amber-50 text-amber-700 hover:bg-amber-100"
-                                  : "bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
-                              }`}
-                            >
-                              {task.title}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* UNSCHEDULED */}
-
-              {unscheduledTasks.length > 0 && (
-                <div className="border-t border-slate-200 p-5">
-                  <h4 className="font-bold text-slate-800">📌 Unscheduled tasks</h4>
-
-                  <p className="mt-1 text-sm text-slate-500">
-                    These tasks don&apos;t have a recognizable calendar date yet.
-                  </p>
-
-                  <div className="mt-3 space-y-2">
-                    {unscheduledTasks.map((task) => (
-                      <div
-                        key={task.id}
-                        className="flex items-center justify-between rounded-xl bg-slate-50 p-3"
-                      >
-                        <div>
-                          <p className="text-sm font-semibold">{task.title}</p>
-
-                          <p className="text-xs text-slate-400">
-                            {task.subject} • Due {task.due}
-                          </p>
-                        </div>
-
-                        <button
-                          onClick={() => toggleTask(task.id)}
-                          className="rounded-full bg-white px-3 py-1.5 text-xs font-bold shadow-sm ring-1 ring-slate-200"
-                        >
-                          {task.completed ? "Done" : "Mark done"}
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </section>
-
-            {/* ==================================================
-                AI CALLOUT
-            ================================================== */}
-
-            <section className="mt-10 overflow-hidden rounded-2xl border border-indigo-100 bg-indigo-50 p-6 sm:p-8">
-              <div className="flex flex-col justify-between gap-6 md:flex-row md:items-center">
-                <div>
-                  <div className="mb-3 inline-flex rounded-full bg-white px-3 py-1 text-xs font-bold text-indigo-600 shadow-sm">
-                    ✨ NOVUS AI
-                  </div>
-
-                  <h3 className="text-2xl font-bold text-slate-950">
-                    Stop organizing. Start learning.
-                  </h3>
-
-                  <p className="mt-2 max-w-2xl text-slate-600">
-                    Paste your messy school information and let Novus turn it
-                    into a clear plan you can actually follow.
-                  </p>
-                </div>
-
-                <button
-                  onClick={() => {
-                    setShowInput(true);
-                    goTo("dashboard");
-                  }}
-                  className="shrink-0 rounded-xl bg-indigo-600 px-5 py-3 font-semibold text-white transition hover:bg-indigo-700"
-                >
-                  Try Novus →
-                </button>
-              </div>
-            </section>
-          </>
-        )}
-
-        {/* ==================================================
-            SPENDING ANALYSIS
-        ================================================== */}
-        {activeView === "spending" && (
-          <section id="spending" className="scroll-mt-28">
-            <div className="mb-6 flex flex-col justify-between gap-3 sm:flex-row sm:items-end">
-              <div>
-                <p className="text-xs font-bold uppercase tracking-widest text-emerald-600">Personal finance</p>
-                <h2 className="mt-1 text-3xl font-bold">Spending tracker</h2>
-                <p className="mt-2 text-slate-500">Record everyday expenses and understand where your money goes. Your entries stay in this browser.</p>
-              </div>
-            </div>
-            {(() => {
-              const monthKey = formatDate(new Date()).slice(0, 7);
-              const monthExpenses = expenses.filter((e) => e.date.startsWith(monthKey));
-              const spent = monthExpenses.reduce((sum, e) => sum + e.amount, 0);
-              const remaining = monthlyBudget - spent;
-              const categoryTotals = EXPENSE_CATEGORIES.map((category) => ({ category, total: monthExpenses.filter((e) => e.category === category).reduce((sum, e) => sum + e.amount, 0) })).sort((a, b) => b.total - a.total);
-              const maxCategory = Math.max(1, ...categoryTotals.map((c) => c.total));
-              const activeCategories = categoryTotals.filter((c) => c.total > 0);
-              const pieColors = ["#10b981", "#6366f1", "#f59e0b", "#ec4899", "#06b6d4", "#8b5cf6"];
-              let pieOffset = 0;
-              const pieStops = activeCategories.map((c, i) => { const pct = spent ? (c.total / spent) * 100 : 0; const start = pieOffset; pieOffset += pct; return `${pieColors[i % pieColors.length]} ${start}% ${pieOffset}%`; });
-              const sixMonthTrend = Array.from({ length: 6 }, (_, i) => { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - (5 - i)); const key = formatDate(d).slice(0, 7); return { key, label: d.toLocaleDateString("en-IN", { month: "short" }), total: expenses.filter((e) => e.date.startsWith(key)).reduce((sum, e) => sum + e.amount, 0) }; });
-              const trendMax = Math.max(1, ...sixMonthTrend.map((m) => m.total));
-              const savingTips = (() => { const tips: string[] = []; if (monthlyBudget > 0 && spent > monthlyBudget) tips.push(`You are ₹${(spent-monthlyBudget).toLocaleString("en-IN", {maximumFractionDigits:0})} over budget. Pause non-essential purchases and set a daily spending limit for the rest of the month.`); else if (monthlyBudget > 0 && spent / monthlyBudget >= .8) tips.push(`You've used ${Math.round(spent/monthlyBudget*100)}% of your budget. Keep the remaining ₹${Math.max(0,remaining).toLocaleString("en-IN", {maximumFractionDigits:0})} for essentials.`); else if (monthlyBudget > 0) tips.push(`You're within budget. Try moving 10–20% of the remaining ₹${Math.max(0,remaining).toLocaleString("en-IN", {maximumFractionDigits:0})} into savings.`); else tips.push("Set a monthly budget to get clearer saving targets and spending alerts."); const top = activeCategories[0]; if (top) tips.push(`${top.category} is your biggest category at ₹${top.total.toLocaleString("en-IN", {maximumFractionDigits:0})}${spent ? ` (${Math.round(top.total/spent*100)}% of spending)` : ""}. Review this category for a realistic cut.`); const shopping = categoryTotals.find(c=>c.category==="Shopping")?.total||0; const entertainment = categoryTotals.find(c=>c.category==="Entertainment")?.total||0; if (shopping+entertainment>0) tips.push(`A 15% reduction in Shopping and Entertainment could free up about ₹${Math.round((shopping+entertainment)*.15).toLocaleString("en-IN")} this month.`); tips.push("Before buying something non-essential, wait 24 hours and compare prices or alternatives."); return tips; })();
-              return (
-                <>
-                  <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                    <div className="rounded-2xl bg-slate-950 p-5 text-white"><p className="text-sm text-slate-400">Spent this month</p><p className="mt-2 text-3xl font-bold">₹{spent.toLocaleString("en-IN", { maximumFractionDigits: 2 })}</p></div>
-                    <div className="rounded-2xl border bg-white p-5"><p className="text-sm text-slate-500">Monthly budget</p><p className="mt-2 text-3xl font-bold">₹{monthlyBudget.toLocaleString("en-IN")}</p></div>
-                    <div className="rounded-2xl border bg-white p-5"><p className="text-sm text-slate-500">Budget remaining</p><p className={`mt-2 text-3xl font-bold ${remaining < 0 ? "text-red-600" : "text-emerald-600"}`}>{monthlyBudget ? `₹${remaining.toLocaleString("en-IN", { maximumFractionDigits: 2 })}` : "—"}</p>{monthlyBudget > 0 && <p className="mt-1 text-xs text-slate-400">{remaining < 0 ? "Over budget" : "Available"}</p>}</div>
-                    <div className="rounded-2xl border bg-white p-5"><p className="text-sm text-slate-500">Transactions this month</p><p className="mt-2 text-3xl font-bold">{monthExpenses.length}</p></div>
-                  </div>
-                  <div className="mt-5 grid gap-5 lg:grid-cols-2">
-                    <div className="rounded-2xl border bg-white p-6 shadow-sm">
-                      <h3 className="text-xl font-bold">Add expense</h3>
-                      <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                        <input value={expenseTitle} onChange={(e) => setExpenseTitle(e.target.value)} placeholder="Description (e.g. lunch)" className="rounded-xl border p-3 text-sm outline-none focus:border-emerald-400 sm:col-span-2" />
-                        <input type="number" min="0.01" step="0.01" value={expenseAmount} onChange={(e) => setExpenseAmount(e.target.value)} placeholder="Amount (₹)" className="rounded-xl border p-3 text-sm outline-none focus:border-emerald-400" />
-                        <select value={expenseCategory} onChange={(e) => setExpenseCategory(e.target.value)} className="rounded-xl border p-3 text-sm">{EXPENSE_CATEGORIES.map((c) => <option key={c}>{c}</option>)}</select>
-                        <input type="date" value={expenseDate} onChange={(e) => setExpenseDate(e.target.value)} className="rounded-xl border p-3 text-sm sm:col-span-2" />
-                      </div>
-                      <button onClick={addExpense} className="mt-4 rounded-xl bg-emerald-600 px-5 py-3 font-semibold text-white hover:bg-emerald-700">+ Add transaction</button>
-                      {expenseNotice && <p role="status" className="mt-3 text-sm text-slate-500">{expenseNotice}</p>}
-                      <div className="mt-6 border-t pt-5"><label className="text-sm font-semibold">Monthly budget (₹)</label><input type="number" min="0" value={monthlyBudget || ""} onChange={(e) => setMonthlyBudget(Math.max(0, Number(e.target.value) || 0))} placeholder="Set your monthly budget" className="mt-2 w-full rounded-xl border p-3 text-sm" /></div>
-                    </div>
-                    <div className="rounded-2xl border bg-white p-6 shadow-sm">
-                      <h3 className="text-xl font-bold">Category breakdown</h3><p className="mt-1 text-sm text-slate-500">Current month</p>
-                      <div className="mt-5 space-y-4">{categoryTotals.map(({category,total}) => <div key={category}><div className="mb-1 flex justify-between text-sm"><span>{category}</span><span className="font-semibold">₹{total.toLocaleString("en-IN", {maximumFractionDigits:2})}</span></div><div className="h-2 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-emerald-500" style={{width: `${(total/maxCategory)*100}%`}} /></div></div>)}</div>
-                    </div>
-                  </div>
-                  <div className="mt-5 grid gap-5 lg:grid-cols-2">
-                    <div className="rounded-2xl border bg-white p-6 shadow-sm"><h3 className="text-xl font-bold">Spending distribution</h3><p className="mt-1 text-sm text-slate-500">Visual share by category for this month</p><div className="mt-5 flex flex-col items-center gap-5 sm:flex-row"><div className="relative h-44 w-44 shrink-0 rounded-full" style={{background: spent > 0 ? `conic-gradient(${pieStops.join(",")})` : "conic-gradient(#e2e8f0 0% 100%)"}}><div className="absolute inset-5 flex flex-col items-center justify-center rounded-full bg-white"><span className="text-xs text-slate-500">Total spent</span><strong className="text-lg">₹{spent.toLocaleString("en-IN", {maximumFractionDigits:0})}</strong></div></div><div className="w-full space-y-2">{activeCategories.length ? activeCategories.map((c,i)=><div key={c.category} className="flex items-center justify-between gap-3 text-sm"><span className="flex items-center gap-2"><span className="h-3 w-3 rounded-full" style={{backgroundColor:pieColors[i%pieColors.length]}}/>{c.category}</span><span className="font-semibold">{spent?Math.round(c.total/spent*100):0}% · ₹{c.total.toLocaleString("en-IN",{maximumFractionDigits:0})}</span></div>) : <p className="text-sm text-slate-500">Add expenses to see the chart.</p>}</div></div></div>
-                    <div className="rounded-2xl border bg-white p-6 shadow-sm"><h3 className="text-xl font-bold">6-month spending trend</h3><p className="mt-1 text-sm text-slate-500">Monthly totals, including the current month</p><div className="mt-5 flex h-44 items-end gap-2">{sixMonthTrend.map((m)=><div key={m.key} className="flex h-full flex-1 flex-col justify-end"><div className="mb-1 text-center text-[10px] text-slate-500">{m.total?`₹${Math.round(m.total/1000*10)/10}k`:"—"}</div><div className="w-full rounded-t-md bg-emerald-500" style={{height:`${m.total?Math.max(4,(m.total/trendMax)*75):2}%`,opacity:m.key===monthKey?1:.65}}/><div className="mt-2 text-center text-xs text-slate-500">{m.label}</div></div>)}</div></div>
-                  </div>
-                  <div className="mt-5 rounded-2xl border bg-amber-50/60 p-6"><h3 className="text-xl font-bold">Smart saving suggestions</h3><p className="mt-1 text-sm text-slate-600">Simple ideas based on your actual spending.</p><ul className="mt-4 space-y-3">{savingTips.map((tip,i)=><li key={i} className="flex gap-3 text-sm leading-relaxed"><span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-amber-100 font-semibold text-amber-700">{i+1}</span><span>{tip}</span></li>)}</ul></div>
-                  <div className="mt-5 rounded-2xl border border-emerald-200 bg-emerald-50/50 p-6"><div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-xl font-bold">AI spending coach</h3><p className="mt-1 text-sm text-slate-600">Insights from this month’s expenses and budget.</p></div><button disabled={spendingAiLoading} onClick={async()=>{setSpendingAiLoading(true);setSpendingAi("");try{const res=await fetch("/api/organise",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"spending",data:{budget:monthlyBudget,month:monthKey,expenses:monthExpenses,spent,remaining,categoryTotals}})});const data=await res.json();if(!res.ok)throw new Error(data.error||"Request failed");setSpendingAi(data.result||"No analysis returned.");}catch(e:any){setSpendingAi(e.message||"Could not get insights.");}finally{setSpendingAiLoading(false);}}} className="rounded-xl bg-emerald-700 px-4 py-3 font-semibold text-white disabled:opacity-50">{spendingAiLoading?"Analyzing…":"Analyze my spending"}</button></div>{spendingAi&&<div className="mt-4 whitespace-pre-wrap rounded-xl bg-white p-4 text-sm leading-relaxed">{spendingAi}</div>}</div>
-                  <div className="mt-5 rounded-2xl border bg-white p-6 shadow-sm">
-                    <div className="flex items-center justify-between"><h3 className="text-xl font-bold">Transaction history</h3><span className="text-sm text-slate-500">{expenses.length} total</span></div>
-                    {expenses.length === 0 ? <p className="mt-4 text-sm text-slate-500">No expenses recorded yet. Add your first transaction above.</p> : <div className="mt-4 divide-y">{expenses.slice().sort((a,b)=>b.date.localeCompare(a.date)).map((expense) => <div key={expense.id} className="flex items-center justify-between gap-3 py-3"><div className="min-w-0"><p className="truncate font-semibold">{expense.title}</p><p className="text-xs text-slate-500">{expense.category} · {expense.date}</p></div><div className="flex items-center gap-3"><span className="font-semibold">−₹{expense.amount.toLocaleString("en-IN", {maximumFractionDigits:2})}</span><button onClick={()=>setExpenses((current)=>current.filter((e)=>e.id!==expense.id))} aria-label={`Delete ${expense.title}`} className="rounded-lg px-2 py-1 text-slate-400 hover:bg-red-50 hover:text-red-500">✕</button></div></div>)}</div>}
-                  </div>
-                </>
-              );
-            })()}
-          </section>
-        )}
-
-        {/* ==================================================
-            FLASHCARDS
-        ================================================== */}
-        {activeView === "flashcards" && (
-          <section className="mx-auto max-w-5xl">
-            <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-              <div><p className="text-xs font-bold uppercase tracking-widest text-violet-600">Active recall · AI Modules 1 & 2</p><h2 className="mt-2 text-4xl font-bold tracking-tight">Flashcards</h2><p className="mt-2 text-slate-500">Study the concepts, flip to reveal, and move at your own pace.</p></div>
-              <div className="rounded-2xl bg-violet-50 px-4 py-3 text-sm font-medium text-violet-700">{filteredFlashcardIndices.length} cards · PDF-based</div>
-            </div>
-            <div className="mb-5 flex flex-wrap items-center gap-3">
-              <select value={flashcardTopic} onChange={(e) => {setFlashcardTopic(e.target.value);setFlashcardIndex(0);setFlashcardFlipped(false);}} className="rounded-xl border bg-white px-4 py-3 text-sm">{flashcardTopics.map((topic) => <option key={topic}>{topic}</option>)}</select>
-              <button onClick={() => {setFlashcardOrder(NOVUS_FLASHCARDS.map((_,i)=>i).sort(()=>Math.random()-0.5));setFlashcardIndex(0);setFlashcardFlipped(false);}} className="rounded-xl border bg-white px-4 py-3 text-sm font-semibold hover:bg-slate-50">↻ Shuffle cards</button>
-              <button onClick={() => {setFlashcardOrder(NOVUS_FLASHCARDS.map((_,i)=>i));setFlashcardTopic("All topics");setFlashcardIndex(0);setFlashcardFlipped(false);}} className="rounded-xl border bg-white px-4 py-3 text-sm font-semibold hover:bg-slate-50">Reset deck</button>
-            </div>
-            {filteredFlashcardIndices.length > 0 && currentFlashcardIndex !== undefined ? (<div>
-              <div className="mb-3 flex items-center justify-between text-sm text-slate-500"><span>{flashcardIndex+1} / {filteredFlashcardIndices.length}</span><span>{NOVUS_FLASHCARDS[currentFlashcardIndex].topic}</span></div>
-              <button onClick={() => setFlashcardFlipped((v)=>!v)} className="group min-h-[340px] w-full rounded-3xl border border-violet-100 bg-white p-8 text-left shadow-sm transition hover:shadow-lg sm:p-12">
-                <div className="mb-8 flex items-center justify-between"><span className="rounded-full bg-violet-100 px-3 py-1 text-xs font-bold uppercase tracking-wide text-violet-700">{flashcardFlipped ? "Answer" : "Question"}</span><span className="text-sm text-slate-400">Click to flip ↻</span></div>
-                <div className="flex min-h-[190px] items-center justify-center"><p className="max-w-3xl text-center text-2xl font-semibold leading-relaxed sm:text-3xl">{flashcardFlipped ? NOVUS_FLASHCARDS[currentFlashcardIndex].answer : NOVUS_FLASHCARDS[currentFlashcardIndex].question}</p></div><p className="mt-6 text-center text-sm text-slate-400">{flashcardFlipped ? "Click to return to the question" : "Try answering before you reveal it"}</p>
-              </button>
-              <div className="mt-5 h-2 overflow-hidden rounded-full bg-slate-200"><div className="h-full rounded-full bg-violet-500 transition-all" style={{width:`${((flashcardIndex+1)/filteredFlashcardIndices.length)*100}%`}} /></div>
-              <div className="mt-5 flex items-center justify-between gap-3"><button disabled={flashcardIndex===0} onClick={()=>{setFlashcardIndex((i)=>Math.max(0,i-1));setFlashcardFlipped(false);}} className="rounded-xl border bg-white px-5 py-3 font-semibold disabled:opacity-40">← Previous</button><button onClick={()=>setFlashcardFlipped((v)=>!v)} className="rounded-xl bg-violet-600 px-5 py-3 font-semibold text-white hover:bg-violet-700">{flashcardFlipped?"Hide answer":"Reveal answer"}</button><button disabled={flashcardIndex>=filteredFlashcardIndices.length-1} onClick={()=>{setFlashcardIndex((i)=>Math.min(filteredFlashcardIndices.length-1,i+1));setFlashcardFlipped(false);}} className="rounded-xl border bg-white px-5 py-3 font-semibold disabled:opacity-40">Next →</button></div>
-            </div>) : <div className="rounded-2xl border bg-white p-8 text-center text-slate-500">No cards in this topic.</div>}
-            <div className="mt-8 rounded-3xl border border-violet-200 bg-violet-50/50 p-6"><h3 className="text-xl font-bold">AI flashcard generator</h3><p className="mt-1 text-sm text-slate-600">Create cards from a topic or your notes.</p><input value={flashAiTopic} onChange={e=>setFlashAiTopic(e.target.value)} placeholder="Topic (e.g. PN junction diode)" className="mt-4 w-full rounded-xl border p-3"/><textarea value={flashAiNotes} onChange={e=>setFlashAiNotes(e.target.value)} placeholder="Optional notes…" rows={4} className="mt-3 w-full rounded-xl border p-3"/><button disabled={flashAiLoading||(!flashAiTopic.trim()&&!flashAiNotes.trim())} onClick={async()=>{setFlashAiLoading(true);setFlashAiResult("");try{const res=await fetch("/api/organise",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"flashcards",topic:flashAiTopic,notes:flashAiNotes})});const data=await res.json();if(!res.ok)throw new Error(data.error||"Request failed");let raw=data.result||"";try{const cards=JSON.parse(raw.replace(/^```(?:json)?\s*/i,"").replace(/\s*```$/,""));setFlashAiResult(cards.map((c:any,i:number)=>`CARD ${i+1}\nQ: ${c.question}\nA: ${c.answer}`).join("\n\n"));}catch{setFlashAiResult(raw);}}catch(e:any){setFlashAiResult(e.message||"Failed to generate.");}finally{setFlashAiLoading(false);}}} className="mt-3 rounded-xl bg-violet-700 px-5 py-3 font-semibold text-white disabled:opacity-50">{flashAiLoading?"Creating…":"Generate flashcards"}</button>{flashAiResult&&<div className="mt-4 whitespace-pre-wrap rounded-xl bg-white p-4 text-sm leading-relaxed">{flashAiResult}</div>}</div>
-            <div className="mt-8 rounded-2xl border bg-white p-5"><h3 className="font-bold">How to use this deck</h3><p className="mt-2 text-sm leading-6 text-slate-500">Read the question, answer from memory, then reveal the card. Filter by topic to focus on a module or concept. These cards are built from the two uploaded AI PDFs.</p></div>
-          </section>
-        )}
-
-        {/* ==================================================
-            VISUAL LAB
-        ================================================== */}
-        {activeView === "visuals" && <VisualLab />}
-
-        {/* ==================================================
-            MEETUP TAB
-        ================================================== */}
-        {activeView === "meetup" && <MeetupTab />}
-
-        {/* FOOTER */}
-
-        <footer className="py-10 text-center text-sm text-slate-400">
-          Novus • A workspace for students.
-        </footer>
-      </div>
-    </main>
-  );
-}
-
-/* ==================================================
-   MEETUP TAB COMPONENT (AI location detection)
-================================================== */
-
-/* ==================================================
-   LEAFLET LOADER (loads once, safe against races)
-================================================== */
-
-let leafletPromise: Promise<any> | null = null;
-
-function loadLeaflet(): Promise<any> {
-  if (typeof window === "undefined") return Promise.reject(new Error("no window"));
-  const w = window as any;
-  if (w.L) return Promise.resolve(w.L);
-  if (leafletPromise) return leafletPromise;
-
-  leafletPromise = new Promise((resolve, reject) => {
-    if (!document.getElementById("leaflet-css")) {
-      const link = document.createElement("link");
-      link.id = "leaflet-css";
-      link.rel = "stylesheet";
-      link.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
-      document.head.appendChild(link);
-    }
-
-    const script = document.createElement("script");
-    script.id = "leaflet-js";
-    script.src = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js";
-    script.async = true;
-    script.onload = () => resolve((window as any).L);
-    script.onerror = () => {
-      leafletPromise = null;
-      reject(new Error("Could not load the map."));
-    };
-    document.body.appendChild(script);
-  });
-
-  return leafletPromise;
-}
-
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
-
-/* ==================================================
-   COMPONENT
-================================================== */
-
-function MeetupTab() {
-  const [people, setPeople] = useState<PersonPoint[]>([
-    { id: 1, name: "Person 1", query: "", lat: null, lon: null },
-    { id: 2, name: "Person 2", query: "", lat: null, lon: null },
-  ]);
-  const [result, setResult] = useState<MeetupResult | null>(null);
-  const [warnings, setWarnings] = useState<string[]>([]);
-  const [aiNote, setAiNote] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [mapError, setMapError] = useState("");
-
-  const mapContainerRef = useRef<HTMLDivElement | null>(null);
-  const mapInstanceRef = useRef<any>(null);
-  const nextId = useRef(3);
-
-  function addPerson() {
-    if (people.length >= 8) return;
-    const id = nextId.current++;
-    setPeople((curr) => [
-      ...curr,
-      { id, name: `Person ${curr.length + 1}`, query: "", lat: null, lon: null },
-    ]);
-  }
-
-  function removePerson(id: number) {
-    if (people.length <= 2) return;
-    setPeople((curr) => curr.filter((p) => p.id !== id));
-    setResult(null);
-  }
-
-  function updatePerson(id: number, patch: Partial<PersonPoint>) {
-    setPeople((curr) =>
-      curr.map((p) =>
-        p.id === id
-          ? {
-              ...p,
-              ...patch,
-              // Editing the place invalidates the previous lookup.
-              ...(patch.query !== undefined
-                ? { lat: null, lon: null, resolvedName: undefined, confidence: undefined }
-                : {}),
-            }
-          : p
-      )
-    );
-    if (patch.query !== undefined) setResult(null);
-  }
-
-  function useMyLocation(id: number) {
-    if (!navigator.geolocation) {
-      setError("Your browser can't share its location.");
-      return;
-    }
-    setError("");
-    navigator.geolocation.getCurrentPosition(
-      async (pos) => {
-        const lat = pos.coords.latitude;
-        const lon = pos.coords.longitude;
-        let label = "My current location";
-        try {
-          const res = await fetch("/api/organise", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ action: "reverse", lat, lon }),
-          });
-          const data = await res.json();
-          if (data?.label) label = data.label;
-        } catch {
-          // keep the generic label
-        }
-        setPeople((curr) =>
-          curr.map((p) =>
-            p.id === id
-              ? { ...p, query: label, lat, lon, resolvedName: label, confidence: "exact" }
-              : p
-          )
-        );
-        setResult(null);
-      },
-      () => setError("Couldn't get your location. Check the browser's location permission."),
-      { enableHighAccuracy: true, timeout: 10000 }
-    );
-  }
-
-  async function calculateMeetup() {
-    setError("");
-    setWarnings([]);
-    setAiNote("");
-
-    const filled = people.filter((p) => p.query.trim().length > 0);
-    if (filled.length < 2) {
-      setError("Enter starting locations for at least 2 people.");
-      return;
-    }
-
-    setLoading(true);
-    try {
-      // People who already have coordinates (e.g. "use my location") skip the lookup.
-      const needLookup = filled.filter((p) => p.lat === null || p.lon === null);
-      const resolved = new Map<number, PersonPoint>();
-      filled.forEach((p) => {
-        if (p.lat !== null && p.lon !== null) resolved.set(p.id, p);
-      });
-
-      if (needLookup.length > 0) {
-        // Send everyone so the AI can use the other entries to pick the right city.
-        const res = await fetch("/api/organise", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            action: "locate",
-            queries: filled.map((p) => ({ id: p.id, name: p.name, query: p.query.trim() })),
-          }),
-        });
-
-        let data: any = null;
-        try {
-          data = await res.json();
-        } catch {
-          throw new Error("The server sent back something unreadable. Try again.");
-        }
-        if (!res.ok) throw new Error(data?.error || "Could not look up those locations.");
-
-        const results: any[] = Array.isArray(data?.results) ? data.results : [];
-        for (const p of needLookup) {
-          const r = results.find((x) => x.id === p.id);
-          if (r && r.lat != null && r.lon != null) {
-            resolved.set(p.id, {
-              ...p,
-              lat: r.lat,
-              lon: r.lon,
-              resolvedName: r.displayName || r.interpreted || p.query,
-              confidence: r.confidence,
-            });
-          } else {
-            resolved.set(p.id, { ...p, confidence: "not_found" });
+    if (!isRunning) return;
+    const id = window.setInterval(() => {
+      setSecondsLeft((prev) => {
+        if (prev <= 1) {
+          setIsRunning(false);
+          if (mode === "focus25" || mode === "focus45") {
+            setCompletedSessions((c) => c + 1);
+            const parsedId = selectedTaskId ? Number(selectedTaskId) : null;
+            onSessionComplete(parsedId, POMODORO_MODES[mode].minutes);
           }
+          return 0;
         }
-
-        if (Array.isArray(data?.warnings)) setWarnings(data.warnings);
-        if (data?.usedAi === false) {
-          setAiNote("The AI helper was unavailable, so plain search was used. Add city names for better accuracy.");
-        }
-      }
-
-      setPeople((curr) => curr.map((p) => resolved.get(p.id) ?? p));
-
-      const missing = filled.filter((p) => resolved.get(p.id)?.lat == null);
-      if (missing.length > 0) {
-        throw new Error(
-          `Couldn't find: ${missing.map((p) => `${p.name} ("${p.query}")`).join(", ")}. Try adding a city or a nearby landmark.`
-        );
-      }
-
-      const best = computeBestMeetingPoint(
-        filled.map((p) => {
-          const r = resolved.get(p.id)!;
-          return { id: p.id, name: p.name, lat: r.lat as number, lon: r.lon as number };
-        })
-      );
-
-      try {
-        const revRes = await fetch("/api/organise", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "reverse", lat: best.lat, lon: best.lon }),
-        });
-        const rev = await revRes.json();
-        if (rev?.label) best.placeLabel = String(rev.label);
-      } catch {
-        // label is optional
-      }
-
-      setResult(best);
-    } catch (err: any) {
-      setResult(null);
-      setError(err?.message || "Failed to calculate meeting point.");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  /* ---------------- Map ---------------- */
-
-  // Only redraw when the actual points change, not on every keystroke.
-  const pointsKey = JSON.stringify([
-    people.map((p) => [p.id, p.name, p.lat, p.lon]),
-    result ? [result.lat, result.lon] : null,
-  ]);
+        return prev - 1;
+      });
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, [isRunning, mode, selectedTaskId, onSessionComplete]);
 
   useEffect(() => {
-    let cancelled = false;
+    if (rainAudioOn) {
+      const AudioCtx =
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext: typeof AudioContext })
+          .webkitAudioContext;
+      const ctx = new AudioCtx();
+      const bufferSize = 2 * ctx.sampleRate;
+      const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+      const output = buffer.getChannelData(0);
 
-    async function renderMap() {
-      if (!mapContainerRef.current) return;
-
-      let L: any;
-      try {
-        L = await loadLeaflet();
-        setMapError("");
-      } catch (err: any) {
-        setMapError(err?.message || "Could not load the map.");
-        return;
-      }
-      if (cancelled || !mapContainerRef.current) return;
-
-      if (mapInstanceRef.current) {
-        mapInstanceRef.current.remove();
-        mapInstanceRef.current = null;
-      }
-
-      const validPoints = people.filter((p) => p.lat !== null && p.lon !== null) as (PersonPoint & {
-        lat: number;
-        lon: number;
-      })[];
-
-      const centerLat = result ? result.lat : validPoints[0]?.lat ?? 12.9716;
-      const centerLon = result ? result.lon : validPoints[0]?.lon ?? 77.5946;
-
-      const map = L.map(mapContainerRef.current).setView([centerLat, centerLon], 12);
-      mapInstanceRef.current = map;
-
-      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        attribution: "&copy; OpenStreetMap contributors",
-        maxZoom: 19,
-      }).addTo(map);
-
-      const latLngs: [number, number][] = [];
-
-      for (const p of validPoints) {
-        latLngs.push([p.lat, p.lon]);
-        L.marker([p.lat, p.lon])
-          .addTo(map)
-          .bindPopup(`<b>${escapeHtml(p.name)}</b><br/>${escapeHtml(p.resolvedName || "")}`);
-
-        if (result) {
-          L.polyline(
-            [
-              [p.lat, p.lon],
-              [result.lat, result.lon],
-            ],
-            { color: "#4f46e5", weight: 2, dashArray: "5, 6" }
-          ).addTo(map);
-        }
+      let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
+      for (let i = 0; i < bufferSize; i++) {
+        const white = Math.random() * 2 - 1;
+        b0 = 0.99886 * b0 + white * 0.0555179;
+        b1 = 0.99332 * b1 + white * 0.0750759;
+        b2 = 0.969 * b2 + white * 0.153852;
+        b3 = 0.8665 * b3 + white * 0.3104856;
+        b4 = 0.55 * b4 + white * 0.5329522;
+        b5 = -0.7616 * b5 - white * 0.016898;
+        output[i] =
+          (b0 + b1 + b2 + b3 + b4 + b5 + b6 + white * 0.5362) * 0.025;
+        b6 = white * 0.115926;
       }
 
-      if (result) {
-        latLngs.push([result.lat, result.lon]);
-        L.circleMarker([result.lat, result.lon], {
-          radius: 10,
-          color: "#059669",
-          fillColor: "#10b981",
-          fillOpacity: 0.9,
-        })
-          .addTo(map)
-          .bindPopup(`<b>Best Meeting Point</b><br/>Avg: ${result.avgKm.toFixed(1)} km`);
-      }
+      const source = ctx.createBufferSource();
+      source.buffer = buffer;
+      source.loop = true;
 
-      if (latLngs.length > 1) {
-        map.fitBounds(latLngs, { padding: [36, 36] });
-      }
+      const filter = ctx.createBiquadFilter();
+      filter.type = "lowpass";
+      filter.frequency.value = 950;
+
+      source.connect(filter);
+      filter.connect(ctx.destination);
+      source.start(0);
+
+      audioCtxRef.current = ctx;
+    } else {
+      audioCtxRef.current?.close();
+      audioCtxRef.current = null;
     }
-
-    void renderMap();
 
     return () => {
-      cancelled = true;
-      if (mapInstanceRef.current) {
-        mapInstanceRef.current.remove();
-        mapInstanceRef.current = null;
-      }
+      audioCtxRef.current?.close();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pointsKey]);
+  }, [rainAudioOn]);
 
-  /* ---------------- Render ---------------- */
-
-  function statusChip(p: PersonPoint) {
-    if (p.confidence === "exact") {
-      return <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-bold text-emerald-700">Found</span>;
-    }
-    if (p.confidence === "approximate") {
-      return <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-bold text-amber-700">Approximate</span>;
-    }
-    if (p.confidence === "not_found") {
-      return <span className="rounded-full bg-red-50 px-2 py-0.5 text-[11px] font-bold text-red-600">Not found</span>;
-    }
-    return null;
-  }
+  const mins = String(Math.floor(secondsLeft / 60)).padStart(2, "0");
+  const secs = String(secondsLeft % 60).padStart(2, "0");
+  const totalSeconds = POMODORO_MODES[mode].minutes * 60;
+  const progressPct = ((totalSeconds - secondsLeft) / totalSeconds) * 100;
+  const activeTasks = tasks.filter((t) => !t.completed);
 
   return (
-    <section id="meetup" className="scroll-mt-28 space-y-6">
-      <div>
-        <p className="text-xs font-bold uppercase tracking-widest text-indigo-600">
-          Location &amp; Distance
-        </p>
-        <h2 className="mt-1 text-3xl font-bold">Best meeting point</h2>
-        <p className="mt-2 text-slate-500">
-          Type places any way you like: a neighbourhood, a landmark, a nickname, even with typos. AI works out where
-          each one is, using everyone&apos;s entries to pick the right city.
-        </p>
+    <div className="relative min-h-[75vh] w-full overflow-hidden rounded-2xl border border-slate-800 bg-gradient-to-b from-slate-950 via-indigo-950 to-slate-900 text-white shadow-2xl">
+      <style>{`
+        @keyframes novusRainFall {
+          0% { transform: translateY(-40px) translateX(0px); }
+          100% { transform: translateY(85vh) translateX(-18px); }
+        }
+        .novus-rain-streak {
+          animation-name: novusRainFall;
+          animation-timing-function: linear;
+          animation-iteration-count: infinite;
+        }
+      `}</style>
+
+      {/* Blurred city bokeh outside window */}
+      <div className="pointer-events-none absolute inset-0 overflow-hidden">
+        <div className="absolute left-[14%] top-[28%] h-28 w-28 rounded-full bg-amber-400/15 blur-2xl" />
+        <div className="absolute left-[38%] top-[42%] h-36 w-36 rounded-full bg-indigo-400/15 blur-3xl" />
+        <div className="absolute right-[18%] top-[32%] h-32 w-32 rounded-full bg-sky-400/15 blur-2xl" />
+        <div className="absolute bottom-[16%] left-[25%] h-24 w-24 rounded-full bg-rose-400/10 blur-2xl" />
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-2">
-        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="flex items-center justify-between">
-            <h3 className="text-xl font-bold">Participants ({people.length})</h3>
+      {/* Falling rain */}
+      <div className="pointer-events-none absolute inset-0">
+        {RAINDROPS.map((drop) => (
+          <span
+            key={drop.id}
+            className="novus-rain-streak absolute top-0 w-[1.5px] rounded-full bg-gradient-to-b from-transparent via-sky-200/70 to-sky-100"
+            style={{
+              left: drop.left,
+              height: drop.height,
+              opacity: drop.opacity,
+              animationDelay: drop.delay,
+              animationDuration: drop.duration,
+            }}
+          />
+        ))}
+      </div>
+
+      {/* Window panes */}
+      <div className="pointer-events-none absolute inset-0 border-[14px] border-slate-950/90 shadow-[inset_0_0_80px_rgba(2,6,23,0.85)]">
+        <div className="absolute inset-y-0 left-1/2 w-3 -translate-x-1/2 bg-slate-950/80" />
+        <div className="absolute inset-x-0 top-1/2 h-3 -translate-y-1/2 bg-slate-950/80" />
+      </div>
+
+      {/* Timer glass card */}
+      <div className="relative z-10 flex min-h-[75vh] flex-col items-center justify-center p-6">
+        <div className="w-full max-w-md rounded-2xl border border-white/15 bg-slate-950/65 p-7 shadow-2xl backdrop-blur-md">
+          <div className="mb-5 flex items-center justify-between">
+            <div>
+              <span className="text-xs font-semibold uppercase tracking-wider text-indigo-300">
+                Novus Focus Window
+              </span>
+              <h2 className="text-lg font-semibold text-white">
+                Rainy Pomodoro Timer
+              </h2>
+            </div>
+
             <button
               type="button"
-              onClick={addPerson}
-              disabled={people.length >= 8}
-              className="rounded-xl border border-slate-200 px-3 py-1.5 text-sm font-semibold hover:bg-slate-50 disabled:opacity-40"
+              onClick={() => setRainAudioOn((prev) => !prev)}
+              className={`rounded-full px-3.5 py-1.5 text-xs font-medium transition ${
+                rainAudioOn
+                  ? "border border-indigo-400/50 bg-indigo-500/30 text-indigo-200"
+                  : "bg-white/10 text-slate-300 hover:bg-white/15"
+              }`}
             >
-              + Add person
+              {rainAudioOn ? "Rain Sound: On" : "Rain Sound: Off"}
             </button>
           </div>
 
-          <div className="mt-4 space-y-3">
-            {people.map((person, idx) => (
-              <div key={person.id} className="rounded-xl bg-slate-50 p-3">
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                  <input
-                    value={person.name}
-                    onChange={(e) => updatePerson(person.id, { name: e.target.value })}
-                    placeholder={`Person ${idx + 1}`}
-                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium sm:w-36"
-                  />
-                  <input
-                    value={person.query}
-                    onChange={(e) => updatePerson(person.id, { query: e.target.value })}
-                    placeholder="e.g. koramangla 5th block, or Phoenix Mall"
-                    className="flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-indigo-400"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => useMyLocation(person.id)}
-                    title="Use my current location"
-                    aria-label={`Use my current location for ${person.name}`}
-                    className="rounded-lg px-2.5 py-2 text-sm text-slate-500 hover:bg-indigo-50 hover:text-indigo-600"
-                  >
-                    📍
-                  </button>
-                  {people.length > 2 && (
-                    <button
-                      type="button"
-                      onClick={() => removePerson(person.id)}
-                      aria-label={`Remove ${person.name}`}
-                      className="rounded-lg px-2.5 py-2 text-sm text-slate-400 hover:bg-red-50 hover:text-red-500"
-                    >
-                      ✕
-                    </button>
-                  )}
-                </div>
-
-                {person.confidence && (
-                  <div className="mt-2 flex items-start gap-2 text-xs text-slate-500">
-                    {statusChip(person)}
-                    {person.resolvedName && (
-                      <span className="min-w-0 break-words">{person.resolvedName}</span>
-                    )}
-                  </div>
-                )}
-              </div>
+          <div className="mb-6 grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {(Object.keys(POMODORO_MODES) as TimerMode[]).map((key) => (
+              <button
+                type="button"
+                key={key}
+                onClick={() => selectMode(key)}
+                className={`rounded-lg px-2.5 py-2 text-xs font-medium transition ${
+                  mode === key
+                    ? "bg-indigo-600 text-white shadow-md"
+                    : "bg-white/5 text-slate-300 hover:bg-white/10"
+                }`}
+              >
+                {POMODORO_MODES[key].label}{" "}
+                <span className="opacity-75">({POMODORO_MODES[key].minutes}m)</span>
+              </button>
             ))}
           </div>
 
-          {error && (
-            <div role="alert" className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-              {error}
+          <div className="my-4 text-center">
+            <div className="font-mono text-6xl font-bold tracking-tight text-white sm:text-7xl">
+              {mins}:{secs}
             </div>
-          )}
-
-          {warnings.length > 0 && (
-            <div role="status" className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-              <ul className="list-disc space-y-1 pl-5">
-                {warnings.map((w) => (
-                  <li key={w}>{w}</li>
-                ))}
-              </ul>
+            <div className="mx-auto mt-4 h-1.5 w-3/4 overflow-hidden rounded-full bg-white/10">
+              <div
+                className="h-full bg-indigo-400 transition-all duration-500"
+                style={{ width: `${progressPct}%` }}
+              />
             </div>
-          )}
+          </div>
 
-          {aiNote && <p className="mt-3 text-xs text-slate-500">{aiNote}</p>}
+          <div className="mt-5">
+            <label className="mb-1.5 block text-xs text-slate-300">
+              Linked Novus Task (optional)
+            </label>
+            <select
+              value={selectedTaskId}
+              onChange={(e) => setSelectedTaskId(e.target.value)}
+              className="w-full rounded-lg border border-white/15 bg-slate-900/90 px-3 py-2 text-sm text-slate-100 focus:border-indigo-400 focus:outline-none"
+            >
+              <option value="">General study session</option>
+              {activeTasks.map((task) => (
+                <option key={task.id} value={String(task.id)}>
+                  [{task.subject}] {task.title}
+                </option>
+              ))}
+            </select>
+          </div>
 
-          <button
-            type="button"
-            onClick={calculateMeetup}
-            disabled={loading}
-            className="mt-5 w-full rounded-xl bg-indigo-600 px-5 py-3 font-semibold text-white transition hover:bg-indigo-700 disabled:opacity-50"
-          >
-            {loading ? "✨ Finding locations…" : "✨ Find best meeting point"}
-          </button>
-        </div>
+          <div className="mt-6 flex items-center justify-center gap-3">
+            <button
+              type="button"
+              onClick={() => setIsRunning((prev) => !prev)}
+              className="flex-1 rounded-xl bg-indigo-600 py-3 text-sm font-semibold text-white shadow-lg transition hover:bg-indigo-500 active:scale-[0.99]"
+            >
+              {isRunning ? "Pause" : "Start Focus"}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setIsRunning(false);
+                setSecondsLeft(POMODORO_MODES[mode].minutes * 60);
+              }}
+              className="rounded-xl border border-white/15 bg-white/5 px-4 py-3 text-sm font-medium text-slate-200 transition hover:bg-white/10"
+            >
+              Reset
+            </button>
+          </div>
 
-        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-          <h3 className="text-xl font-bold">Distance summary</h3>
-
-          {!result ? (
-            <p className="mt-4 text-sm text-slate-500">
-              Enter at least two locations and click the button to see the common average distance and each
-              person&apos;s distance.
-            </p>
-          ) : (
-            <div className="mt-4 space-y-4">
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div className="rounded-2xl bg-slate-950 p-4 text-white">
-                  <p className="text-xs text-slate-400">Common average distance</p>
-                  <p className="mt-1 text-3xl font-bold">{result.avgKm.toFixed(1)} km</p>
-                </div>
-                <div className="rounded-2xl bg-emerald-50 p-4">
-                  <p className="text-xs font-semibold text-emerald-700">Farthest leg</p>
-                  <p className="mt-1 text-3xl font-bold text-emerald-900">{result.maxKm.toFixed(1)} km</p>
-                </div>
-              </div>
-
-              <p className="rounded-xl bg-indigo-50 px-3.5 py-2.5 text-sm text-indigo-800">
-                ⚖️ Fair split: everyone travels between <b>{result.minKm.toFixed(1)} km</b> and{" "}
-                <b>{result.maxKm.toFixed(1)} km</b> (gap {result.gapKm.toFixed(1)} km).
-              </p>
-
-              <div className="rounded-xl bg-slate-50 p-3.5 text-sm">
-                <p className="font-semibold text-slate-800">Recommended coordinates</p>
-                <p className="mt-0.5 font-mono text-xs text-slate-600">
-                  {result.lat.toFixed(5)}, {result.lon.toFixed(5)}
-                </p>
-                {result.placeLabel && <p className="mt-1 text-xs text-slate-500">Near: {result.placeLabel}</p>}
-                <a
-                  href={`https://www.google.com/maps/search/?api=1&query=${result.lat},${result.lon}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="mt-2 inline-block text-xs font-semibold text-indigo-600 hover:underline"
-                >
-                  Open point in Google Maps →
-                </a>
-              </div>
-
-              <div className="divide-y rounded-xl border border-slate-100">
-                {result.distances.map((d) => (
-                  <div key={d.id} className="flex items-center justify-between px-4 py-2.5 text-sm">
-                    <span className="font-medium text-slate-700">{d.name}</span>
-                    <span className="font-semibold text-slate-900">{d.km.toFixed(1)} km</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-
-      <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-        <h3 className="text-xl font-bold">Map view</h3>
-        <p className="mt-1 text-sm text-slate-500">
-          Shows participant markers, dashed legs, and the calculated meeting point.
-        </p>
-        {mapError && <p className="mt-2 text-sm text-red-600">{mapError}</p>}
-        <div
-          ref={mapContainerRef}
-          className="mt-4 h-96 w-full overflow-hidden rounded-2xl border border-slate-200 bg-slate-100"
-        />
-      </div>
-    </section>
-  );
-}
-
-function VisualLabCard({title,children,tag}:{title:string;children:any;tag?:string}) { return <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7"><div className="mb-4 flex items-center justify-between"><h3 className="text-xl font-bold">{title}</h3>{tag&&<span className="rounded-full bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-700">{tag}</span>}</div>{children}</div>; }
-
-function VisualLab() {
-  const [bias, setBias] = useState("forward");
-  const [rectifier, setRectifier] = useState("bridge");
-  const [filter, setFilter] = useState(true);
-  const [a, setA] = useState(1); const [b, setB] = useState(0); const [cin, setCin] = useState(1);
-  const [gateA, setGateA] = useState(0); const [gateB, setGateB] = useState(1);
-  const [decimal, setDecimal] = useState("42");
-  const sum = a ^ b ^ cin, carry = (a&b)|(a&cin)|(b&cin);
-  const wave=(kind:string)=>Array.from({length:361},(_,i)=>{const x=i/360*4*Math.PI;let y=Math.sin(x); if(kind==='half') y=Math.max(0,y); if(kind==='full') y=Math.abs(y); if(kind==='bridge') y=Math.abs(y); if(kind==='filtered') y=0.45+0.18*Math.abs(Math.sin(x)); return `${i===0?'M':'L'} ${(i/360*620).toFixed(1)} ${(110-y*70).toFixed(1)}`}).join(' ');
-  const binary=(Number(decimal)||0).toString(2);
-  const [visualQuestion,setVisualQuestion]=useState(""); const [visualAnswer,setVisualAnswer]=useState(""); const [visualLoading,setVisualLoading]=useState(false);
-  async function askVisualAI(){setVisualLoading(true);setVisualAnswer("");try{const context=`PN bias ${bias}; rectifier ${rectifier}; filter ${filter}; adder A=${a}, B=${b}, Cin=${cin}, sum=${sum}, carry=${carry}; gate inputs ${gateA},${gateB}; decimal ${decimal}, binary ${binary}.`;const res=await fetch("/api/organise",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"visual",context,question:visualQuestion||"Explain these current interactive states."})});const data=await res.json();if(!res.ok)throw new Error(data.error||"Request failed");setVisualAnswer(data.result||"No answer.");}catch(e:any){setVisualAnswer(e.message||"Could not get explanation.");}finally{setVisualLoading(false);}}
-
-  return <section className="space-y-6"><div className="overflow-hidden rounded-3xl bg-gradient-to-br from-indigo-950 via-violet-900 to-slate-900 p-8 text-white sm:p-12"><p className="text-xs font-bold uppercase tracking-[.25em] text-violet-200">NOVUS · INTERACTIVE VISUAL LAB</p><h2 className="mt-3 text-4xl font-black tracking-tight sm:text-5xl">Electronics, made alive.</h2><p className="mt-4 max-w-2xl text-violet-100">Explore circuits by changing inputs, bias, and modes. Visuals are reconstructed from your PDFs—excluding the JPEG question sheet.</p><div className="mt-6 flex flex-wrap gap-2">{['Semiconductors','Rectifiers','Logic','Number systems'].map(x=><span key={x} className="rounded-full border border-white/20 bg-white/10 px-3 py-1.5 text-sm">{x}</span>)}</div></div>
-    <div className="grid gap-5 xl:grid-cols-2">
-      <VisualLabCard title="PN junction · Bias explorer" tag="ESC Module 1"><div className="flex gap-2"><button type="button" onClick={()=>setBias('forward')} className={`rounded-xl px-4 py-2 font-semibold ${bias==='forward'?'bg-indigo-600 text-white':'bg-slate-100'}`}>Forward bias</button><button type="button" onClick={()=>setBias('reverse')} className={`rounded-xl px-4 py-2 font-semibold ${bias==='reverse'?'bg-indigo-600 text-white':'bg-slate-100'}`}>Reverse bias</button><button type="button" onClick={()=>setBias('none')} className={`rounded-xl px-4 py-2 font-semibold ${bias==='none'?'bg-indigo-600 text-white':'bg-slate-100'}`}>Unbiased</button></div><svg viewBox="0 0 620 230" className="mt-4 w-full"><rect x="35" y="55" width="245" height="110" rx="12" fill="#dbeafe"/><rect x="340" y="55" width="245" height="110" rx="12" fill="#e0e7ff"/><rect x="280" y="55" width={bias==='reverse'?100:bias==='forward'?36:65} height="110" fill="#cbd5e1"/><text x="145" y="45" textAnchor="middle" fontSize="22" fill="#1d4ed8">P-type · holes</text><text x="465" y="45" textAnchor="middle" fontSize="22" fill="#4338ca">N-type · electrons</text><text x="310" y="190" textAnchor="middle" fontSize="16" fill="#475569">{bias==='reverse'?'WIDE depletion region':bias==='forward'?'NARROW depletion region':'Depletion region'}</text>{Array.from({length:10},(_,i)=><g key={i}><circle cx={70+i*20} cy="110" r="5" fill="#2563eb"/><circle cx={400+i*17} cy="110" r="5" fill="#4f46e5"/></g>)}{bias==='forward'?<g><path d="M250 105 L305 105 L295 95 M305 105 L295 115" stroke="#16a34a" strokeWidth="4" fill="none"/><text x="310" y="25" textAnchor="middle" fill="#15803d">Carrier flow ↑</text></g>:bias==='reverse'?<text x="310" y="25" textAnchor="middle" fill="#b91c1c">Carrier flow suppressed</text>:null}</svg><p className="rounded-xl bg-slate-50 p-3 text-sm text-slate-600">{bias==='forward'?'Positive at P, negative at N: barrier and depletion width shrink; current flows.':bias==='reverse'?'Positive at N, negative at P: depletion width expands; only tiny leakage current normally flows.':'No external bias: built-in barrier and depletion region remain.'}</p><div className="mt-3 grid grid-cols-2 gap-3 text-sm"><div className="rounded-xl bg-blue-50 p-3"><b>Si knee</b><p>≈ 0.7 V</p></div><div className="rounded-xl bg-violet-50 p-3"><b>Ge knee</b><p>≈ 0.3 V</p></div></div></VisualLabCard>
-      <VisualLabCard title="Rectifier waveform studio" tag="Rectifier PDF"><div className="flex flex-wrap gap-2">{[['half','Half-wave'],['full','Centre-tapped'],['bridge','Bridge']].map(([v,l])=><button type="button" key={v} onClick={()=>setRectifier(v)} className={`rounded-xl px-3 py-2 text-sm font-semibold ${rectifier===v?'bg-indigo-600 text-white':'bg-slate-100'}`}>{l}</button>)}</div><label className="mt-4 flex items-center gap-2 text-sm"><input type="checkbox" checked={filter} onChange={e=>setFilter(e.target.checked)}/> Add capacitor filter (illustrative ripple)</label><svg viewBox="0 0 620 260" className="mt-4 w-full"><g stroke="#e2e8f0" strokeWidth="1">{[40,80,120,160,200].map(y=><line key={y} x1="0" y1={y} x2="620" y2={y}/>)}<line x1="0" y1="110" x2="620" y2="110"/></g><path d={wave('sine')} stroke="#94a3b8" strokeWidth="3" fill="none"/><path d={wave(filter?'filtered':rectifier)} stroke="#4f46e5" strokeWidth="4" fill="none"/><text x="10" y="20" fill="#64748b" fontSize="15">Input (grey) · Output (indigo)</text><text x="10" y="245" fill="#64748b" fontSize="14">Time →</text></svg><p className="text-sm text-slate-600">{rectifier==='half'?'One diode conducts on positive half-cycles; negative half-cycles are blocked.':rectifier==='full'?'Two diodes alternate in a centre-tapped circuit, giving both half-cycles positive at the load.':'Four bridge diodes steer both half-cycles through the load in the same direction.'} {filter?'Capacitor smooths the output; the plotted ripple is illustrative.':'Without a capacitor, output remains pulsating DC.'}</p></VisualLabCard>
-      <VisualLabCard title="Half-adder → Full-adder" tag="Digital Circuits"><div className="grid grid-cols-3 gap-2">{[['A',a,setA],['B',b,setB],['Cin',cin,setCin]].map(([name,val,set]:any)=><button type="button" key={name} onClick={()=>set((v:number)=>1-v)} className="rounded-2xl bg-slate-950 p-4 text-white"><p className="text-xs text-slate-400">{name}</p><p className="text-3xl font-black">{val}</p><p className="text-xs">tap to toggle</p></button>)}</div><svg viewBox="0 0 620 230" className="mt-4 w-full"><rect x="50" y="45" width="190" height="140" rx="18" fill="#ede9fe" stroke="#8b5cf6"/><rect x="380" y="45" width="190" height="140" rx="18" fill="#dbeafe" stroke="#3b82f6"/><text x="145" y="80" textAnchor="middle" fontSize="22" fill="#6d28d9">Half-adder 1</text><text x="145" y="112" textAnchor="middle" fontSize="18">A ⊕ B · A&amp;B</text><text x="475" y="80" textAnchor="middle" fontSize="22" fill="#1d4ed8">Half-adder 2</text><text x="475" y="112" textAnchor="middle" fontSize="18">S1 ⊕ Cin · S1&amp;Cin</text><path d="M240 110 L380 110" stroke="#64748b" strokeWidth="3"/><path d="M300 110 L300 160 L360 160" stroke="#64748b" strokeWidth="3" fill="none"/><text x="310" y="205" textAnchor="middle" fontSize="16">Carry logic combines both carry paths</text></svg><div className="grid grid-cols-2 gap-3"><div className="rounded-2xl bg-violet-50 p-5"><p className="text-sm text-violet-700">SUM</p><p className="text-4xl font-black">{sum}</p><p className="text-xs">A ⊕ B ⊕ Cin</p></div><div className="rounded-2xl bg-blue-50 p-5"><p className="text-sm text-blue-700">CARRY</p><p className="text-4xl font-black">{carry}</p><p className="text-xs">AB + ACin + BCin</p></div></div><p className="mt-3 text-sm text-slate-600">Toggle the three inputs above to see all eight full-adder states.</p></VisualLabCard>
-      <VisualLabCard title="Logic-gate playground" tag="Truth table"><div className="flex gap-3"><button type="button" onClick={()=>setGateA(1-gateA)} className="rounded-xl bg-slate-900 px-5 py-3 text-white">A = {gateA} · toggle</button><button type="button" onClick={()=>setGateB(1-gateB)} className="rounded-xl bg-slate-900 px-5 py-3 text-white">B = {gateB} · toggle</button></div><div className="mt-5 grid grid-cols-2 gap-3">{[['AND',gateA&gateB],['OR',gateA|gateB],['XOR',gateA^gateB],['NAND',1-(gateA&gateB)],['NOR',1-(gateA|gateB)],['XNOR',1-(gateA^gateB)]].map(([name,val]:any)=><div key={name} className="flex items-center justify-between rounded-xl border p-4"><span className="font-semibold">{name}</span><span className="rounded-lg bg-indigo-50 px-4 py-2 text-2xl font-black text-indigo-700">{val}</span></div>)}</div><table className="mt-5 w-full text-center text-sm"><thead><tr className="bg-slate-50"><th className="p-2">A</th><th>B</th><th>AND</th><th>OR</th><th>XOR</th></tr></thead><tbody>{[[0,0],[0,1],[1,0],[1,1]].map(([x,y])=><tr key={`${x}${y}`} className="border-t"><td className="p-2">{x}</td><td>{y}</td><td>{x&y}</td><td>{x|y}</td><td>{x^y}</td></tr>)}</tbody></table></VisualLabCard>
-      <VisualLabCard title="Number-base converter" tag="Digital Circuits PDF"><label className="text-sm font-semibold">Decimal input</label><input value={decimal} onChange={e=>setDecimal(e.target.value)} type="number" className="mt-2 w-full rounded-xl border p-3"/><div className="mt-4 grid gap-3 sm:grid-cols-3"><div className="rounded-xl bg-slate-950 p-4 text-white"><p className="text-xs text-slate-400">Binary</p><p className="break-all text-2xl font-bold">{binary}</p></div><div className="rounded-xl bg-indigo-50 p-4"><p className="text-xs text-indigo-600">Octal</p><p className="text-2xl font-bold">{(Number(decimal)||0).toString(8)}</p></div><div className="rounded-xl bg-violet-50 p-4"><p className="text-xs text-violet-600">Hexadecimal</p><p className="text-2xl font-bold">{(Number(decimal)||0).toString(16).toUpperCase()}</p></div></div><p className="mt-3 text-sm text-slate-500">Live conversion for non-negative whole numbers. The PDF also illustrates fractional conversion and bit grouping.</p></VisualLabCard>
-      <VisualLabCard title="1’s & 2’s complement" tag="Interactive"><label className="text-sm">Enter binary bits</label><input defaultValue="101101" id="complement-input" className="mt-2 w-full rounded-xl border p-3 font-mono"/><button type="button" onClick={()=>{const el=document.getElementById('complement-input') as HTMLInputElement; const bits=el.value.replace(/[^01]/g,'');const one=bits.split('').map(x=>x==='1'?'0':'1').join(''); alert(`1's complement: ${one}\n2's complement: ${(()=>{let carry=1,out='';for(let i=one.length-1;i>=0;i--){const bit=Number(one[i]);const sum=bit+carry;out=(sum%2)+out;carry=Math.floor(sum/2);}return out.padStart(bits.length,'0').slice(-bits.length);})()}`)}} className="mt-3 rounded-xl bg-indigo-600 px-4 py-3 font-semibold text-white">Calculate complements</button><p className="mt-4 rounded-xl bg-slate-50 p-3 text-sm text-slate-600">1’s complement flips every bit. 2’s complement adds 1 to the flipped bit pattern (fixed-width result shown).</p></VisualLabCard>
-    </div><VisualLabCard title="AI electronics tutor" tag="Gemini"><p className="text-sm text-slate-600">Ask about the concepts or interactive settings.</p><textarea value={visualQuestion} onChange={e=>setVisualQuestion(e.target.value)} placeholder="Why does reverse bias widen the depletion region?" rows={3} className="mt-3 w-full rounded-xl border p-3"/><button type="button" disabled={visualLoading} onClick={askVisualAI} className="mt-3 rounded-xl bg-indigo-700 px-5 py-3 font-semibold text-white disabled:opacity-50">{visualLoading?"Thinking…":"Ask AI tutor"}</button>{visualAnswer&&<div className="mt-4 whitespace-pre-wrap rounded-xl bg-slate-50 p-4 text-sm leading-relaxed">{visualAnswer}</div>}</VisualLabCard><div className="rounded-2xl border border-indigo-100 bg-indigo-50 p-5 text-sm text-indigo-800"><b>Visual sources:</b> PN diode and VI curve concepts, rectifier and filtering waveforms, digital gates, adder logic, and number-base/complement operations were reconstructed from the uploaded PDFs. The JPEG question sheet was intentionally ignored.</div></section>;
-}
-
-/* ==================================================
-   TASK CARD
-================================================== */
-
-function TaskCard({
-  task,
-  overdue,
-  onToggle,
-  onRemove,
-}: {
-  task: Task;
-  overdue: boolean;
-  onToggle: () => void;
-  onRemove: () => void;
-}) {
-  const priorityClasses: Record<Priority, string> = {
-    High: "bg-red-50 text-red-600",
-    Medium: "bg-amber-50 text-amber-600",
-    Low: "bg-emerald-50 text-emerald-600",
-  };
-
-  return (
-    <div
-      className={`group flex flex-col gap-4 rounded-2xl border bg-white p-5 shadow-sm transition hover:shadow-md sm:flex-row sm:items-center sm:justify-between ${
-        task.completed
-          ? "border-slate-100 opacity-60"
-          : overdue
-          ? "border-red-200"
-          : "border-slate-200"
-      }`}
-    >
-      <div className="flex items-start gap-4">
-        <button
-          onClick={onToggle}
-          aria-label={
-            task.completed ? "Mark task incomplete" : "Mark task complete"
-          }
-          className={`mt-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 transition ${
-            task.completed
-              ? "border-indigo-600 bg-indigo-600 text-white"
-              : "border-slate-300 hover:border-indigo-500"
-          }`}
-        >
-          {task.completed && <span className="text-xs">✓</span>}
-        </button>
-
-        <div>
-          <h4
-            className={`font-semibold ${
-              task.completed ? "text-slate-400 line-through" : "text-slate-900"
-            }`}
-          >
-            {task.title}
-          </h4>
-
-          <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-slate-500">
-            <span>{task.subject}</span>
-            <span>•</span>
-            <span>Due {task.due}</span>
-
-            {!!task.estimatedMinutes && (
-              <>
-                <span>•</span>
-                <span>{task.estimatedMinutes} min</span>
-              </>
-            )}
-
-            {overdue && (
-              <span className="rounded-full bg-red-50 px-2 py-0.5 text-xs font-bold text-red-600">
-                Overdue
-              </span>
-            )}
+          <div className="mt-5 flex items-center justify-between border-t border-white/10 pt-3 text-xs text-slate-400">
+            <span>
+              Completed sessions:{" "}
+              <strong className="text-indigo-300">{completedSessions}</strong>
+            </span>
+            <span>Novus Focus Tab</span>
           </div>
         </div>
       </div>
-
-      <div className="flex items-center gap-3">
-        <span
-          className={`w-fit rounded-full px-3 py-1 text-xs font-bold ${
-            priorityClasses[task.priority]
-          }`}
-        >
-          {task.priority} priority
-        </span>
-
-        <button
-          onClick={onRemove}
-          aria-label={`Remove ${task.title}`}
-          className="rounded-lg px-2 py-1 text-sm text-slate-300 transition hover:bg-red-50 hover:text-red-500 focus:text-red-500"
-        >
-          ✕
-        </button>
-      </div>
     </div>
+  );
+}
+
+/* ==================================================
+   MAIN PAGE SHELL WITH FOCUS TAB
+================================================== */
+
+export default function NovusPage() {
+  const [activeTab, setActiveTab] = useState<"dashboard" | "focus" | "flashcards">("focus");
+  const [tasks, setTasks] = useState<Task[]>(() => createDefaultTasks(new Date()));
+  const [flashIdx, setFlashIdx] = useState(0);
+  const [showAnswer, setShowAnswer] = useState(false);
+
+  const handleSessionComplete = (taskId: number | null, minutes: number) => {
+    if (taskId === null) return;
+    setTasks((prev) =>
+      prev.map((t) =>
+        t.id === taskId
+          ? {
+              ...t,
+              estimatedMinutes: Math.max(5, (t.estimatedMinutes ?? 30) - minutes),
+            }
+          : t
+      )
+    );
+  };
+
+  const currentCard = NOVUS_FLASHCARDS[flashIdx];
+
+  return (
+    <main className="min-h-screen bg-slate-50 p-4 sm:p-8 text-slate-900">
+      <div className="mx-auto max-w-6xl">
+        {/* Top Navigation Bar */}
+        <header className="mb-6 flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-slate-200 bg-white px-5 py-3.5 shadow-sm">
+          <div className="flex items-center gap-2.5">
+            <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-600 text-sm font-bold text-white">
+              N
+            </span>
+            <span className="text-lg font-bold tracking-tight text-slate-900">
+              Novus
+            </span>
+          </div>
+
+          <nav className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setActiveTab("dashboard")}
+              className={`rounded-lg px-3.5 py-2 text-sm font-medium transition ${
+                activeTab === "dashboard"
+                  ? "bg-indigo-600 text-white"
+                  : "text-slate-600 hover:bg-slate-100"
+              }`}
+            >
+              Tasks ({tasks.filter((t) => !t.completed).length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab("focus")}
+              className={`rounded-lg px-3.5 py-2 text-sm font-medium transition ${
+                activeTab === "focus"
+                  ? "bg-indigo-600 text-white"
+                  : "text-slate-600 hover:bg-slate-100"
+              }`}
+            >
+              Focus & Rain
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab("flashcards")}
+              className={`rounded-lg px-3.5 py-2 text-sm font-medium transition ${
+                activeTab === "flashcards"
+                  ? "bg-indigo-600 text-white"
+                  : "text-slate-600 hover:bg-slate-100"
+              }`}
+            >
+              Flashcards ({NOVUS_FLASHCARDS.length})
+            </button>
+          </nav>
+        </header>
+
+        {/* Active Tab Content */}
+        {activeTab === "focus" && (
+          <RainyPomodoroView
+            tasks={tasks}
+            onSessionComplete={handleSessionComplete}
+          />
+        )}
+
+        {activeTab === "dashboard" && (
+          <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+            <h1 className="mb-4 text-xl font-bold">
+              {getGreeting(new Date().getHours())} — Active Tasks
+            </h1>
+            <div className="space-y-3">
+              {tasks.map((task) => (
+                <div
+                  key={task.id}
+                  className="flex items-center justify-between rounded-xl border border-slate-200 p-4"
+                >
+                  <div>
+                    <p className="font-semibold">{task.title}</p>
+                    <p className="text-xs text-slate-500">
+                      {task.subject} · Due: {task.due} · {task.priority} Priority · ~
+                      {task.estimatedMinutes ?? 30}m
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setTasks((prev) =>
+                        prev.map((item) =>
+                          item.id === task.id
+                            ? { ...item, completed: !item.completed }
+                            : item
+                        )
+                      )
+                    }
+                    className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium hover:bg-slate-50"
+                  >
+                    {task.completed ? "Completed" : "Mark Done"}
+                  </button>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {activeTab === "flashcards" && (
+          <section className="mx-auto max-w-xl rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div className="mb-3 flex items-center justify-between text-xs text-slate-500">
+              <span className="font-semibold text-indigo-600">
+                {currentCard.topic}
+              </span>
+              <span>
+                Card {flashIdx + 1} / {NOVUS_FLASHCARDS.length}
+              </span>
+            </div>
+            <div
+              onClick={() => setShowAnswer((s) => !s)}
+              className="min-h-[160px] cursor-pointer rounded-xl border border-slate-200 bg-slate-50 p-5"
+            >
+              <p className="font-semibold text-slate-900">
+                {currentCard.question}
+              </p>
+              {showAnswer ? (
+                <p className="mt-3 text-sm text-indigo-700">
+                  {currentCard.answer}
+                </p>
+              ) : (
+                <p className="mt-4 text-xs text-slate-400">
+                  Click card to reveal answer
+                </p>
+              )}
+            </div>
+            <div className="mt-4 flex justify-between">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowAnswer(false);
+                  setFlashIdx(
+                    (i) => (i - 1 + NOVUS_FLASHCARDS.length) % NOVUS_FLASHCARDS.length
+                  );
+                }}
+                className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium"
+              >
+                Previous
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowAnswer(false);
+                  setFlashIdx((i) => (i + 1) % NOVUS_FLASHCARDS.length);
+                }}
+                className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white"
+              >
+                Next
+              </button>
+            </div>
+          </section>
+        )}
+      </div>
+    </main>
   );
 }
