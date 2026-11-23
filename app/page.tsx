@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 /* ==================================================
    TYPES & CONSTANTS
@@ -729,7 +729,7 @@ const NOVUS_FLASHCARDS: { topic: string; question: string; answer: string }[] = 
 export default function Home() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loaded, setLoaded] = useState(false);
-  const [activeView, setActiveView] = useState<"dashboard" | "spending" | "flashcards" | "visuals" | "meetup">("dashboard");
+  const [activeView, setActiveView] = useState<"dashboard" | "spending" | "flashcards" | "visuals" | "meetup" | "pomodoro">("dashboard");
   const [flashcardIndex, setFlashcardIndex] = useState(0);
   const [flashcardFlipped, setFlashcardFlipped] = useState(false);
   const [flashcardTopic, setFlashcardTopic] = useState("All topics");
@@ -1268,12 +1268,13 @@ export default function Home() {
     );
   }
 
-  const navItems: ["dashboard" | "spending" | "flashcards" | "visuals" | "meetup", string][] = [
+  const navItems: ["dashboard" | "spending" | "flashcards" | "visuals" | "meetup" | "pomodoro", string][] = [
     ["dashboard", "Dashboard"],
     ["spending", "Spending"],
     ["flashcards", "Flashcards"],
     ["visuals", "Visual Lab"],
     ["meetup", "Meetup"],
+    ["pomodoro", "Pomodoro"],
   ];
 
   return (
@@ -2069,6 +2070,15 @@ History presentation due Monday.`}
         ================================================== */}
         {activeView === "meetup" && <MeetupTab />}
 
+        {/* ==================================================
+            POMODORO TAB
+            Always mounted (just hidden) so the timer keeps running
+            while you look at other tabs.
+        ================================================== */}
+        <div className={activeView === "pomodoro" ? "" : "hidden"}>
+          <PomodoroTab tasks={tasks} active={activeView === "pomodoro"} />
+        </div>
+
         {/* FOOTER */}
 
         <footer className="py-10 text-center text-sm text-slate-400">
@@ -2076,6 +2086,1043 @@ History presentation due Monday.`}
         </footer>
       </div>
     </main>
+  );
+}
+
+/* ==================================================
+   POMODORO TAB (rainy night window view)
+================================================== */
+
+type PomoMode = "focus" | "short" | "long";
+type RainLevel = "off" | "light" | "steady" | "heavy";
+
+const POMO_STORAGE_KEY = "novus-pomodoro-v1";
+const POMO_LABELS: Record<PomoMode, string> = {
+  focus: "Focus",
+  short: "Short break",
+  long: "Long break",
+};
+const POMO_ACCENTS: Record<PomoMode, string> = {
+  focus: "#fbbf24",
+  short: "#5eead4",
+  long: "#c4b5fd",
+};
+const POMO_RAIN_DENSITY: Record<RainLevel, number> = {
+  off: 0,
+  light: 0.35,
+  steady: 0.7,
+  heavy: 1.2,
+};
+const POMO_RAIN_LEVELS: RainLevel[] = ["off", "light", "steady", "heavy"];
+const POMO_DEFAULTS = { focus: 25, short: 5, long: 15 };
+const POMO_RING_RADIUS = 118;
+const POMO_RING_LENGTH = 2 * Math.PI * POMO_RING_RADIUS;
+
+function pomoPad(n: number): string {
+  return String(n).padStart(2, "0");
+}
+
+function pomoClock(ms: number): string {
+  const total = Math.max(0, Math.ceil(ms / 1000));
+  return `${pomoPad(Math.floor(total / 60))}:${pomoPad(total % 60)}`;
+}
+
+function pomoToday(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${pomoPad(d.getMonth() + 1)}-${pomoPad(d.getDate())}`;
+}
+
+function pomoClamp(value: unknown, min: number, max: number, fallback: number): number {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(n)));
+}
+
+/* ---------------- Rain scene (canvas) ----------------
+   Draws a night city skyline seen through wet glass: out-of-focus lights,
+   falling rain, water drops that slide down the pane, optional lightning.
+   Returns a cleanup function. */
+
+type PomoStreak = { x: number; y: number; len: number; speed: number };
+type PomoDrop = {
+  x: number;
+  y: number;
+  r: number;
+  rMax: number;
+  vy: number;
+  age: number;
+  ripe: number;
+  slideLeft: number;
+  slides: number;
+  trail: { x: number; y: number }[];
+};
+
+function createRainScene(
+  container: HTMLElement,
+  canvas: HTMLCanvasElement,
+  getOptions: () => { rain: RainLevel; lightning: boolean },
+  reducedMotion: boolean
+): () => void {
+  const context = canvas.getContext("2d");
+  if (!context) return () => {};
+  const g: CanvasRenderingContext2D = context;
+
+  let w = 0;
+  let h = 0;
+  let dpr = 1;
+  let raf = 0;
+  let stopped = false;
+  let bg: HTMLCanvasElement | null = null;
+  const far: PomoStreak[] = [];
+  const near: PomoStreak[] = [];
+  let drops: PomoDrop[] = [];
+  let flash = 0;
+  let flashStage = 0;
+  let nextFlash = performance.now() + 15000 + Math.random() * 25000;
+  let last = performance.now();
+
+  const rand = (a: number, b: number) => a + Math.random() * (b - a);
+
+  function buildBackground(): HTMLCanvasElement | null {
+    const c = document.createElement("canvas");
+    c.width = Math.max(1, Math.round(w * dpr));
+    c.height = Math.max(1, Math.round(h * dpr));
+    const b = c.getContext("2d");
+    if (!b) return null;
+    b.scale(dpr, dpr);
+
+    // Night sky
+    const sky = b.createLinearGradient(0, 0, 0, h);
+    sky.addColorStop(0, "#050a1c");
+    sky.addColorStop(0.45, "#0f1838");
+    sky.addColorStop(0.8, "#232651");
+    sky.addColorStop(1, "#2e2a55");
+    b.fillStyle = sky;
+    b.fillRect(0, 0, w, h);
+
+    // Moon glow behind the clouds
+    const mx = w * 0.8;
+    const my = h * 0.17;
+    const mr = Math.max(w, h) * 0.28;
+    const moon = b.createRadialGradient(mx, my, 0, mx, my, mr);
+    moon.addColorStop(0, "rgba(190,210,255,0.38)");
+    moon.addColorStop(0.25, "rgba(140,170,240,0.13)");
+    moon.addColorStop(1, "rgba(140,170,240,0)");
+    b.fillStyle = moon;
+    b.fillRect(0, 0, w, h);
+
+    // Soft storm clouds
+    for (let i = 0; i < 7; i++) {
+      const cx = rand(0, w);
+      const cy = rand(0.04 * h, 0.38 * h);
+      const rx = rand(0.15 * w, 0.35 * w);
+      const ry = rand(0.04 * h, 0.09 * h);
+      b.save();
+      b.translate(cx, cy);
+      b.scale(1, ry / rx);
+      const cg = b.createRadialGradient(0, 0, 0, 0, 0, rx);
+      cg.addColorStop(0, "rgba(25,34,72,0.55)");
+      cg.addColorStop(1, "rgba(25,34,72,0)");
+      b.fillStyle = cg;
+      b.fillRect(-rx, -rx, rx * 2, rx * 2);
+      b.restore();
+    }
+
+    // City skyline layers
+    const windowColors = [
+      "rgba(255,214,150,0.6)",
+      "rgba(255,200,120,0.55)",
+      "rgba(160,210,255,0.5)",
+      "rgba(255,170,190,0.45)",
+    ];
+    const layer = (
+      baseY: number,
+      minH: number,
+      maxH: number,
+      minW: number,
+      maxW: number,
+      color: string,
+      litChance: number,
+      blur: number,
+      winW: number,
+      winH: number,
+      gapX: number,
+      gapY: number
+    ) => {
+      b.save();
+      (b as any).filter = blur > 0 ? `blur(${blur}px)` : "none";
+      let x = -10;
+      while (x < w) {
+        const bw = rand(minW, maxW);
+        const bh = rand(minH, maxH) * h;
+        const top = baseY - bh;
+        b.fillStyle = color;
+        b.fillRect(x, top, bw, bh + (h - baseY));
+        for (let wy = top + 8; wy < baseY - 6; wy += gapY) {
+          for (let wx = x + 6; wx < x + bw - winW - 4; wx += gapX) {
+            if (Math.random() < litChance) {
+              b.fillStyle = windowColors[Math.floor(Math.random() * windowColors.length)];
+              b.fillRect(wx, wy, winW, winH);
+            }
+          }
+        }
+        x += bw + rand(0, 6);
+      }
+      b.restore();
+    };
+    layer(h * 0.86, 0.12, 0.32, 34, 80, "#101a3a", 0.1, 1.6, 3, 4, 8, 10);
+    layer(h * 0.95, 0.2, 0.48, 60, 130, "#070b1b", 0.16, 0.8, 5, 7, 12, 15);
+
+    // Street glow near the bottom
+    const glow = b.createLinearGradient(0, h * 0.6, 0, h);
+    glow.addColorStop(0, "rgba(255,170,100,0)");
+    glow.addColorStop(1, "rgba(255,170,100,0.14)");
+    b.fillStyle = glow;
+    b.fillRect(0, h * 0.6, w, h * 0.4);
+
+    // Out-of-focus lights seen through the wet glass
+    const palette = ["255,190,110", "255,140,160", "120,220,255", "255,255,230", "160,150,255"];
+    for (let i = 0; i < 24; i++) {
+      const bx = rand(0, w);
+      const by = rand(0.45 * h, 0.98 * h);
+      const br = rand(8, 34);
+      const col = palette[Math.floor(Math.random() * palette.length)];
+      const alpha = rand(0.1, 0.26);
+      const bk = b.createRadialGradient(bx, by, 0, bx, by, br);
+      bk.addColorStop(0, `rgba(${col},${alpha})`);
+      bk.addColorStop(0.7, `rgba(${col},${alpha * 0.6})`);
+      bk.addColorStop(1, `rgba(${col},0)`);
+      b.fillStyle = bk;
+      b.beginPath();
+      b.arc(bx, by, br, 0, Math.PI * 2);
+      b.fill();
+    }
+
+    return c;
+  }
+
+  function newStreak(minLen: number, maxLen: number, minSpeed: number, maxSpeed: number): PomoStreak {
+    return {
+      x: rand(-0.2 * h, w),
+      y: rand(-0.2 * h, h),
+      len: rand(minLen, maxLen),
+      speed: rand(minSpeed, maxSpeed),
+    };
+  }
+
+  function adjust(
+    arr: PomoStreak[],
+    target: number,
+    minLen: number,
+    maxLen: number,
+    minSpeed: number,
+    maxSpeed: number
+  ) {
+    let guard = 0;
+    while (arr.length < target && guard++ < 8) arr.push(newStreak(minLen, maxLen, minSpeed, maxSpeed));
+    guard = 0;
+    while (arr.length > target && guard++ < 8) arr.pop();
+  }
+
+  function newDrop(seed: boolean): PomoDrop {
+    return {
+      x: rand(0, w),
+      y: seed ? rand(0, h * 0.95) : rand(0, h * 0.5),
+      r: rand(1.2, 3),
+      rMax: rand(3, 6),
+      vy: 0,
+      age: seed ? rand(0, 5) : 0,
+      ripe: rand(3, 12),
+      slideLeft: 0,
+      slides: Math.floor(rand(1, 4)),
+      trail: [],
+    };
+  }
+
+  function drawStreaks(arr: PomoStreak[], k: number, slope: number, style: string, width: number) {
+    g.strokeStyle = style;
+    g.lineWidth = width;
+    g.beginPath();
+    for (const s of arr) {
+      s.y += s.speed * k;
+      s.x += s.speed * slope * k;
+      if (s.y - s.len > h || s.x > w + 60) {
+        s.y = -s.len - rand(0, h * 0.2);
+        s.x = rand(-0.2 * h, w);
+      }
+      g.moveTo(s.x, s.y);
+      g.lineTo(s.x - s.len * slope, s.y - s.len);
+    }
+    g.stroke();
+  }
+
+  function frame(now: number) {
+    if (stopped) return;
+    const dt = Math.min(0.05, Math.max(0, (now - last) / 1000));
+    last = now;
+    const k = reducedMotion ? 0 : dt * 60;
+    const { rain, lightning } = getOptions();
+    const density = POMO_RAIN_DENSITY[rain];
+
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    if (bg) g.drawImage(bg, 0, 0, w, h);
+
+    // Lightning (double flash)
+    if (lightning && !reducedMotion && now > nextFlash) {
+      flash = 1;
+      flashStage = 0;
+      nextFlash = now + rand(14000, 40000);
+    }
+    if (flash > 0) {
+      g.fillStyle = `rgba(205,220,255,${(flash * 0.32).toFixed(3)})`;
+      g.fillRect(0, 0, w, h);
+      flash = Math.max(0, flash - dt * 2.6);
+      if (flash < 0.5 && flashStage === 0) {
+        flash = 0.85;
+        flashStage = 1;
+      }
+    }
+
+    // Falling rain
+    adjust(far, Math.round(((w * h) / 9000) * density), 8, 16, 10, 15);
+    adjust(near, Math.round(((w * h) / 26000) * density), 18, 34, 17, 26);
+    drawStreaks(far, k, 0.16, "rgba(170,190,230,0.22)", 1);
+    drawStreaks(near, k, 0.16, "rgba(205,218,245,0.4)", 1.4);
+
+    // Drops sliding down the glass
+    if (!reducedMotion && density > 0 && drops.length < 70 && Math.random() < 0.12 * density * k) {
+      drops.push(newDrop(false));
+    }
+    for (const d of drops) {
+      d.age += dt;
+      if (d.vy === 0 && d.slides > 0 && d.age > d.ripe) {
+        d.vy = rand(1, 3);
+        d.slideLeft = rand(0.5, 1.8);
+        d.slides--;
+      }
+      if (d.vy > 0) {
+        d.y += d.vy * k;
+        d.x += rand(-0.15, 0.15) * k;
+        d.trail.push({ x: d.x, y: d.y });
+        if (d.trail.length > 28) d.trail.shift();
+        d.slideLeft -= dt;
+        if (d.slideLeft <= 0 && !reducedMotion) {
+          d.age = 0;
+          d.ripe = rand(2, 8);
+          d.r = Math.max(1.2, d.r * 0.8);
+          if (d.slides === 0) {
+            d.vy = rand(3, 5); // last run: leaves the pane
+            d.slideLeft = 999;
+          } else {
+            d.vy = 0;
+          }
+        }
+      } else if (!reducedMotion) {
+        d.r = Math.min(d.rMax, d.r + 0.2 * dt);
+      }
+    }
+    drops = drops.filter((d) => d.y < h + 12);
+
+    g.lineWidth = 1;
+    g.strokeStyle = "rgba(190,210,240,0.1)";
+    for (const d of drops) {
+      if (d.trail.length > 1) {
+        g.beginPath();
+        g.moveTo(d.trail[0].x, d.trail[0].y);
+        for (let i = 1; i < d.trail.length; i++) g.lineTo(d.trail[i].x, d.trail[i].y);
+        g.stroke();
+      }
+    }
+    for (const d of drops) {
+      g.fillStyle = "rgba(170,195,235,0.15)";
+      g.beginPath();
+      g.ellipse(d.x, d.y, d.r, d.r * 1.3, 0, 0, Math.PI * 2);
+      g.fill();
+      g.strokeStyle = "rgba(255,255,255,0.3)";
+      g.lineWidth = 0.8;
+      g.beginPath();
+      g.arc(d.x - d.r * 0.1, d.y - d.r * 0.2, d.r * 0.7, Math.PI * 1.05, Math.PI * 1.6);
+      g.stroke();
+    }
+
+    if (!reducedMotion && !stopped) raf = requestAnimationFrame(frame);
+  }
+
+  function resize() {
+    const cw = container.clientWidth;
+    const ch = container.clientHeight;
+    if (cw === 0 || ch === 0 || (cw === w && ch === h)) return;
+    w = cw;
+    h = ch;
+    dpr = Math.min(2, window.devicePixelRatio || 1);
+    canvas.width = Math.round(w * dpr);
+    canvas.height = Math.round(h * dpr);
+    bg = buildBackground();
+    far.length = 0;
+    near.length = 0;
+    drops = [];
+    if (POMO_RAIN_DENSITY[getOptions().rain] > 0) {
+      for (let i = 0; i < 25; i++) drops.push(newDrop(true));
+    }
+    if (reducedMotion) frame(performance.now());
+  }
+
+  const observer = new ResizeObserver(resize);
+  observer.observe(container);
+  resize();
+
+  let reducedTimer = 0;
+  if (reducedMotion) {
+    // No animation: just redraw once a second so setting changes still show up.
+    reducedTimer = window.setInterval(() => frame(performance.now()), 1000);
+  } else {
+    raf = requestAnimationFrame(frame);
+  }
+
+  return () => {
+    stopped = true;
+    cancelAnimationFrame(raf);
+    window.clearInterval(reducedTimer);
+    observer.disconnect();
+  };
+}
+
+/* ---------------- Small stepper control ---------------- */
+
+function PomoStepper({
+  label,
+  value,
+  min,
+  max,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <div className="flex items-center justify-between rounded-xl bg-slate-50 px-4 py-2.5">
+      <span className="text-sm font-medium text-slate-700">{label}</span>
+      <div className="flex items-center gap-3">
+        <button
+          type="button"
+          onClick={() => onChange(value - 1)}
+          disabled={value <= min}
+          aria-label={`Decrease ${label}`}
+          className="h-8 w-8 rounded-lg border border-slate-200 bg-white text-lg leading-none text-slate-600 hover:bg-slate-100 disabled:opacity-40"
+        >
+          −
+        </button>
+        <span className="w-14 text-center text-sm font-bold tabular-nums">{value} min</span>
+        <button
+          type="button"
+          onClick={() => onChange(value + 1)}
+          disabled={value >= max}
+          aria-label={`Increase ${label}`}
+          className="h-8 w-8 rounded-lg border border-slate-200 bg-white text-lg leading-none text-slate-600 hover:bg-slate-100 disabled:opacity-40"
+        >
+          +
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------- Pomodoro tab ---------------- */
+
+function PomodoroTab({ tasks, active }: { tasks: Task[]; active: boolean }) {
+  const [mode, setMode] = useState<PomoMode>("focus");
+  const [durations, setDurations] = useState(POMO_DEFAULTS);
+  const [remainingMs, setRemainingMs] = useState(POMO_DEFAULTS.focus * 60000);
+  const [running, setRunning] = useState(false);
+  const [autoStart, setAutoStart] = useState(false);
+  const [cycle, setCycle] = useState(0); // focus sessions finished in the current set of 4
+  const [doneToday, setDoneToday] = useState(0);
+  const [rain, setRain] = useState<RainLevel>("steady");
+  const [lightning, setLightning] = useState(false);
+  const [soundOn, setSoundOn] = useState(false);
+  const [volume, setVolume] = useState(0.5);
+  const [taskId, setTaskId] = useState("");
+  const [hydrated, setHydrated] = useState(false);
+
+  const sceneRef = useRef<HTMLDivElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const endAtRef = useRef(0);
+  const audioRef = useRef<AudioContext | null>(null);
+  const rainGainRef = useRef<GainNode | null>(null);
+  const rainRef = useRef<RainLevel>("steady");
+  const lightningRef = useRef(false);
+  const volumeRef = useRef(0.5);
+  const originalTitleRef = useRef("");
+
+  const accent = POMO_ACCENTS[mode];
+  const totalMs = durations[mode] * 60000;
+  const fraction = totalMs > 0 ? Math.min(1, Math.max(0, remainingMs / totalMs)) : 0;
+  const pendingTasks = tasks.filter((t) => !t.completed);
+  const selectedTask = pendingTasks.find((t) => String(t.id) === taskId);
+
+  /* ---------- audio ---------- */
+
+  const ensureAudio = useCallback((): AudioContext | null => {
+    if (typeof window === "undefined") return null;
+    if (!audioRef.current) {
+      const Ctor: typeof AudioContext | undefined =
+        window.AudioContext || (window as any).webkitAudioContext;
+      if (!Ctor) return null;
+      try {
+        audioRef.current = new Ctor();
+      } catch {
+        return null;
+      }
+    }
+    if (audioRef.current.state === "suspended") void audioRef.current.resume();
+    return audioRef.current;
+  }, []);
+
+  const playChime = useCallback(() => {
+    const ctx = ensureAudio();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    [660, 880, 1320].forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      const t = now + i * 0.18;
+      osc.type = "sine";
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.0001, t);
+      gain.gain.exponentialRampToValueAtTime(0.18, t + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + 1.2);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(t);
+      osc.stop(t + 1.3);
+    });
+  }, [ensureAudio]);
+
+  /* ---------- timer ---------- */
+
+  const finish = useCallback(() => {
+    playChime();
+    let next: PomoMode;
+    if (mode === "focus") {
+      const newCycle = cycle + 1;
+      setDoneToday((n) => n + 1);
+      if (newCycle >= 4) {
+        next = "long";
+        setCycle(0);
+      } else {
+        next = "short";
+        setCycle(newCycle);
+      }
+    } else {
+      next = "focus";
+    }
+    const ms = durations[next] * 60000;
+    setMode(next);
+    setRemainingMs(ms);
+    if (autoStart) {
+      endAtRef.current = Date.now() + ms;
+    } else {
+      setRunning(false);
+    }
+  }, [mode, cycle, durations, autoStart, playChime]);
+
+  useEffect(() => {
+    if (!running) return;
+    const id = window.setInterval(() => {
+      const left = endAtRef.current - Date.now();
+      if (left <= 0) finish();
+      else setRemainingMs(left);
+    }, 250);
+    return () => window.clearInterval(id);
+  }, [running, finish]);
+
+  function start() {
+    ensureAudio(); // created inside the click so browsers allow sound later
+    const ms = remainingMs > 0 ? remainingMs : durations[mode] * 60000;
+    setRemainingMs(ms);
+    endAtRef.current = Date.now() + ms;
+    setRunning(true);
+  }
+
+  function pause() {
+    setRemainingMs(Math.max(0, endAtRef.current - Date.now()));
+    setRunning(false);
+  }
+
+  function switchMode(next: PomoMode) {
+    setMode(next);
+    setRunning(false);
+    setRemainingMs(durations[next] * 60000);
+  }
+
+  function resetTimer() {
+    setRunning(false);
+    setRemainingMs(durations[mode] * 60000);
+  }
+
+  function skip() {
+    switchMode(mode === "focus" ? "short" : "focus");
+  }
+
+  function setDuration(which: PomoMode, value: number) {
+    const max = which === "focus" ? 180 : 60;
+    const next = pomoClamp(value, 1, max, POMO_DEFAULTS[which]);
+    setDurations((d) => ({ ...d, [which]: next }));
+    if (which === mode && !running) setRemainingMs(next * 60000);
+  }
+
+  /* ---------- tab title ---------- */
+
+  useEffect(() => {
+    originalTitleRef.current = document.title;
+    return () => {
+      document.title = originalTitleRef.current;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (running) {
+      document.title = `${pomoClock(remainingMs)} · ${POMO_LABELS[mode]} — Novus`;
+    } else if (originalTitleRef.current) {
+      document.title = originalTitleRef.current;
+    }
+  }, [running, remainingMs, mode]);
+
+  /* ---------- save / load settings ---------- */
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(POMO_STORAGE_KEY);
+      if (raw) {
+        const saved = JSON.parse(raw);
+        const loaded = {
+          focus: pomoClamp(saved?.durations?.focus, 1, 180, POMO_DEFAULTS.focus),
+          short: pomoClamp(saved?.durations?.short, 1, 60, POMO_DEFAULTS.short),
+          long: pomoClamp(saved?.durations?.long, 1, 60, POMO_DEFAULTS.long),
+        };
+        setDurations(loaded);
+        setRemainingMs(loaded.focus * 60000);
+        if (typeof saved?.autoStart === "boolean") setAutoStart(saved.autoStart);
+        if (POMO_RAIN_LEVELS.includes(saved?.rain)) setRain(saved.rain);
+        if (typeof saved?.lightning === "boolean") setLightning(saved.lightning);
+        if (typeof saved?.volume === "number") setVolume(Math.min(1, Math.max(0, saved.volume)));
+        if (saved?.date === pomoToday()) setDoneToday(pomoClamp(saved?.doneToday, 0, 999, 0));
+      }
+    } catch {
+      // storage unavailable: defaults are fine
+    }
+    setHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    try {
+      window.localStorage.setItem(
+        POMO_STORAGE_KEY,
+        JSON.stringify({
+          durations,
+          autoStart,
+          rain,
+          lightning,
+          volume,
+          date: pomoToday(),
+          doneToday,
+        })
+      );
+    } catch {
+      // ignore
+    }
+  }, [hydrated, durations, autoStart, rain, lightning, volume, doneToday]);
+
+  /* ---------- rain sound ---------- */
+
+  useEffect(() => {
+    volumeRef.current = volume;
+    const ctx = audioRef.current;
+    if (ctx && rainGainRef.current) {
+      rainGainRef.current.gain.setTargetAtTime(volume * 0.35, ctx.currentTime, 0.1);
+    }
+  }, [volume]);
+
+  useEffect(() => {
+    if (!soundOn) return;
+    const ctx = ensureAudio();
+    if (!ctx) return;
+
+    const length = ctx.sampleRate * 4;
+    const buffer = ctx.createBuffer(2, length, ctx.sampleRate);
+    for (let ch = 0; ch < 2; ch++) {
+      const data = buffer.getChannelData(ch);
+      for (let i = 0; i < length; i++) data[i] = Math.random() * 2 - 1;
+    }
+
+    const master = ctx.createGain();
+    master.gain.value = 0;
+    master.connect(ctx.destination);
+
+    const hiss = ctx.createBufferSource();
+    hiss.buffer = buffer;
+    hiss.loop = true;
+    const hp = ctx.createBiquadFilter();
+    hp.type = "highpass";
+    hp.frequency.value = 700;
+    const lp = ctx.createBiquadFilter();
+    lp.type = "lowpass";
+    lp.frequency.value = 7000;
+    hiss.connect(hp);
+    hp.connect(lp);
+    lp.connect(master);
+
+    const rumble = ctx.createBufferSource();
+    rumble.buffer = buffer;
+    rumble.loop = true;
+    rumble.loopStart = 1.3;
+    const rumbleLp = ctx.createBiquadFilter();
+    rumbleLp.type = "lowpass";
+    rumbleLp.frequency.value = 260;
+    const rumbleGain = ctx.createGain();
+    rumbleGain.gain.value = 0.5;
+    rumble.connect(rumbleLp);
+    rumbleLp.connect(rumbleGain);
+    rumbleGain.connect(master);
+
+    hiss.start();
+    rumble.start();
+    rainGainRef.current = master;
+    master.gain.setTargetAtTime(volumeRef.current * 0.35, ctx.currentTime, 0.4);
+
+    return () => {
+      master.gain.setTargetAtTime(0, ctx.currentTime, 0.05);
+      rainGainRef.current = null;
+      window.setTimeout(() => {
+        try {
+          hiss.stop();
+          rumble.stop();
+          master.disconnect();
+        } catch {
+          // already stopped
+        }
+      }, 300);
+    };
+  }, [soundOn, ensureAudio]);
+
+  useEffect(() => {
+    return () => {
+      const ctx = audioRef.current;
+      audioRef.current = null;
+      if (ctx) void ctx.close().catch(() => {});
+    };
+  }, []);
+
+  /* ---------- canvas scene ---------- */
+
+  useEffect(() => {
+    rainRef.current = rain;
+    lightningRef.current = lightning;
+  }, [rain, lightning]);
+
+  useEffect(() => {
+    if (!active) return;
+    const container = sceneRef.current;
+    const canvas = canvasRef.current;
+    if (!container || !canvas) return;
+    const reduced =
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    return createRainScene(
+      container,
+      canvas,
+      () => ({ rain: rainRef.current, lightning: lightningRef.current }),
+      reduced
+    );
+  }, [active]);
+
+  /* ---------- render ---------- */
+
+  const filledDots = mode === "long" ? 4 : cycle;
+  const focusMinutesToday = doneToday * durations.focus;
+
+  return (
+    <section id="pomodoro" className="scroll-mt-28 space-y-6">
+      <style>{`
+        @keyframes pomo-steam {
+          0% { opacity: 0; transform: translateY(6px) scaleX(1); }
+          30% { opacity: .55; }
+          100% { opacity: 0; transform: translateY(-16px) scaleX(1.25); }
+        }
+        .pomo-steam { animation: pomo-steam 3.2s ease-in-out infinite; transform-origin: center bottom; transform-box: fill-box; }
+        @media (prefers-reduced-motion: reduce) { .pomo-steam { animation: none; opacity: .3; } }
+      `}</style>
+
+      <div>
+        <p className="text-xs font-bold uppercase tracking-widest text-indigo-600">Deep focus</p>
+        <h2 className="mt-1 text-3xl font-bold">Pomodoro timer</h2>
+        <p className="mt-2 text-slate-500">
+          Work in focused rounds with short breaks in between, while it rains outside your window. The timer keeps
+          running if you switch to another tab.
+        </p>
+      </div>
+
+      {/* WINDOW VIEW */}
+      <div
+        className="relative overflow-hidden rounded-[2rem] border-[14px] border-[#24180f] bg-[#050a1c]"
+        style={{ boxShadow: "0 25px 60px -15px rgba(0,0,0,.6), inset 0 0 0 2px rgba(255,255,255,.05)" }}
+      >
+        <div ref={sceneRef} className="relative min-h-[640px] w-full sm:min-h-[700px]">
+          <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" aria-hidden="true" />
+
+          {/* glass: vignette, reflection and fog at the bottom */}
+          <div
+            className="pointer-events-none absolute inset-0"
+            style={{ background: "radial-gradient(ellipse at 50% 40%, transparent 45%, rgba(0,0,0,.55) 100%)" }}
+          />
+          <div
+            className="pointer-events-none absolute inset-0"
+            style={{
+              background:
+                "linear-gradient(115deg, rgba(255,255,255,.07) 0%, rgba(255,255,255,0) 28%, rgba(255,255,255,0) 70%, rgba(255,255,255,.04) 100%)",
+            }}
+          />
+          <div
+            className="pointer-events-none absolute inset-x-0 bottom-0 h-1/3"
+            style={{ background: "linear-gradient(to top, rgba(210,225,255,.14), rgba(210,225,255,0))" }}
+          />
+
+          {/* timer */}
+          <div className="relative z-10 flex min-h-[640px] flex-col items-center justify-center px-4 pb-20 pt-8 sm:min-h-[700px]">
+            <div className="w-full max-w-sm rounded-[2rem] border border-white/15 bg-slate-950/35 p-6 text-center text-white shadow-2xl backdrop-blur-md">
+              <div className="grid grid-cols-3 gap-1 rounded-2xl bg-white/10 p-1" role="group" aria-label="Timer mode">
+                {(["focus", "short", "long"] as PomoMode[]).map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => switchMode(m)}
+                    aria-pressed={mode === m}
+                    className={`rounded-xl px-2 py-2 text-xs font-semibold transition ${
+                      mode === m ? "bg-white/90 text-slate-900" : "text-white/70 hover:bg-white/10"
+                    }`}
+                  >
+                    {POMO_LABELS[m]}
+                  </button>
+                ))}
+              </div>
+
+              <div className="relative mx-auto mt-5 h-64 w-64">
+                <svg viewBox="0 0 260 260" className="h-full w-full -rotate-90" aria-hidden="true">
+                  <circle cx="130" cy="130" r={POMO_RING_RADIUS} fill="none" stroke="rgba(255,255,255,.12)" strokeWidth="8" />
+                  <circle
+                    cx="130"
+                    cy="130"
+                    r={POMO_RING_RADIUS}
+                    fill="none"
+                    stroke={accent}
+                    strokeWidth="8"
+                    strokeLinecap="round"
+                    strokeDasharray={POMO_RING_LENGTH}
+                    strokeDashoffset={POMO_RING_LENGTH * (1 - fraction)}
+                    style={{ filter: `drop-shadow(0 0 8px ${accent})`, transition: "stroke-dashoffset .3s linear" }}
+                  />
+                </svg>
+                <div className="absolute inset-0 flex flex-col items-center justify-center">
+                  <p
+                    role="timer"
+                    className="text-6xl font-light tabular-nums tracking-tight"
+                    style={{ textShadow: "0 0 24px rgba(255,255,255,.25)" }}
+                  >
+                    {pomoClock(remainingMs)}
+                  </p>
+                  <p className="mt-1 text-xs font-semibold uppercase tracking-[0.2em]" style={{ color: accent }}>
+                    {POMO_LABELS[mode]}
+                  </p>
+                </div>
+              </div>
+
+              <p className="mt-1 h-5 truncate text-sm text-white/70">
+                {selectedTask ? `Working on: ${selectedTask.title}` : " "}
+              </p>
+
+              <div className="mt-4 flex items-center justify-center gap-3">
+                <button
+                  type="button"
+                  onClick={resetTimer}
+                  className="rounded-xl border border-white/20 px-4 py-3 text-sm font-semibold text-white/80 hover:bg-white/10"
+                >
+                  Reset
+                </button>
+                <button
+                  type="button"
+                  onClick={running ? pause : start}
+                  className="min-w-[8rem] rounded-xl px-6 py-3 text-base font-bold text-slate-900 shadow-lg transition hover:brightness-110"
+                  style={{ background: accent }}
+                >
+                  {running ? "Pause" : remainingMs < totalMs ? "Resume" : "Start"}
+                </button>
+                <button
+                  type="button"
+                  onClick={skip}
+                  className="rounded-xl border border-white/20 px-4 py-3 text-sm font-semibold text-white/80 hover:bg-white/10"
+                >
+                  Skip
+                </button>
+              </div>
+
+              <div className="mt-5 flex items-center justify-center gap-2" aria-label={`${filledDots} of 4 focus rounds done`}>
+                {[0, 1, 2, 3].map((i) => (
+                  <span
+                    key={i}
+                    className="h-2.5 w-2.5 rounded-full"
+                    style={{ background: i < filledDots ? accent : "rgba(255,255,255,.2)" }}
+                  />
+                ))}
+              </div>
+              <p className="mt-2 text-xs text-white/60">
+                Today: {doneToday} {doneToday === 1 ? "session" : "sessions"} · about {focusMinutesToday} min focused
+              </p>
+            </div>
+          </div>
+
+          {/* window sill with a mug */}
+          <div
+            className="pointer-events-none absolute inset-x-0 bottom-0 z-20 h-14"
+            style={{ background: "linear-gradient(to bottom,#3a281a,#1c120b)", borderTop: "2px solid #5a4030" }}
+          />
+          <svg
+            className="pointer-events-none absolute bottom-[3.3rem] right-6 z-20 sm:right-16"
+            width="72"
+            height="84"
+            viewBox="0 0 72 84"
+            aria-hidden="true"
+          >
+            <path className="pomo-steam" d="M26 28 C20 20, 32 14, 26 6" stroke="rgba(255,255,255,.5)" strokeWidth="2.5" fill="none" strokeLinecap="round" />
+            <path className="pomo-steam" style={{ animationDelay: "1s" }} d="M38 28 C32 20, 44 14, 38 4" stroke="rgba(255,255,255,.5)" strokeWidth="2.5" fill="none" strokeLinecap="round" />
+            <path className="pomo-steam" style={{ animationDelay: "2s" }} d="M50 28 C44 20, 56 14, 50 8" stroke="rgba(255,255,255,.45)" strokeWidth="2.5" fill="none" strokeLinecap="round" />
+            <path d="M58 44 C72 44, 72 66, 56 66" stroke="#d9d0c3" strokeWidth="5" fill="none" strokeLinecap="round" />
+            <rect x="12" y="32" width="46" height="46" rx="8" fill="#e8e1d6" />
+            <rect x="12" y="32" width="46" height="46" rx="8" fill="url(#pomoMugShade)" />
+            <ellipse cx="35" cy="34" rx="21" ry="4.5" fill="#5b3a24" />
+            <defs>
+              <linearGradient id="pomoMugShade" x1="0" x2="1" y1="0" y2="0">
+                <stop offset="0" stopColor="rgba(255,255,255,.25)" />
+                <stop offset="1" stopColor="rgba(0,0,0,.25)" />
+              </linearGradient>
+            </defs>
+          </svg>
+        </div>
+      </div>
+
+      {/* SETTINGS */}
+      <div className="grid gap-6 lg:grid-cols-2">
+        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <h3 className="text-xl font-bold">Timer settings</h3>
+          <div className="mt-4 space-y-3">
+            <PomoStepper label="Focus" value={durations.focus} min={1} max={180} onChange={(v) => setDuration("focus", v)} />
+            <PomoStepper label="Short break" value={durations.short} min={1} max={60} onChange={(v) => setDuration("short", v)} />
+            <PomoStepper label="Long break" value={durations.long} min={1} max={60} onChange={(v) => setDuration("long", v)} />
+
+            <label className="flex cursor-pointer items-center justify-between rounded-xl bg-slate-50 px-4 py-3">
+              <span className="text-sm font-medium text-slate-700">Start the next session automatically</span>
+              <input
+                type="checkbox"
+                checked={autoStart}
+                onChange={(e) => setAutoStart(e.target.checked)}
+                className="h-4 w-4 accent-indigo-600"
+              />
+            </label>
+
+            <div className="rounded-xl bg-slate-50 px-4 py-3">
+              <label htmlFor="pomo-task" className="text-sm font-medium text-slate-700">
+                What are you working on?
+              </label>
+              <select
+                id="pomo-task"
+                value={taskId}
+                onChange={(e) => setTaskId(e.target.value)}
+                className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-indigo-400"
+              >
+                <option value="">Nothing specific</option>
+                {pendingTasks.map((t) => (
+                  <option key={t.id} value={String(t.id)}>
+                    {t.title}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <h3 className="text-xl font-bold">Ambience</h3>
+          <div className="mt-4 space-y-3">
+            <div className="rounded-xl bg-slate-50 px-4 py-3">
+              <p className="text-sm font-medium text-slate-700">Rain</p>
+              <div className="mt-2 grid grid-cols-4 gap-1 rounded-xl bg-slate-200/70 p-1" role="group" aria-label="Rain amount">
+                {POMO_RAIN_LEVELS.map((level) => (
+                  <button
+                    key={level}
+                    type="button"
+                    onClick={() => setRain(level)}
+                    aria-pressed={rain === level}
+                    className={`rounded-lg px-2 py-1.5 text-xs font-semibold capitalize transition ${
+                      rain === level ? "bg-white text-indigo-600 shadow-sm" : "text-slate-600 hover:text-slate-900"
+                    }`}
+                  >
+                    {level}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <label className="flex cursor-pointer items-center justify-between rounded-xl bg-slate-50 px-4 py-3">
+              <span className="text-sm font-medium text-slate-700">Occasional lightning flashes</span>
+              <input
+                type="checkbox"
+                checked={lightning}
+                onChange={(e) => setLightning(e.target.checked)}
+                className="h-4 w-4 accent-indigo-600"
+              />
+            </label>
+
+            <div className="rounded-xl bg-slate-50 px-4 py-3">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-medium text-slate-700">Rain sound</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    ensureAudio();
+                    setSoundOn((v) => !v);
+                  }}
+                  aria-pressed={soundOn}
+                  className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+                    soundOn ? "bg-indigo-600 text-white" : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-100"
+                  }`}
+                >
+                  {soundOn ? "On" : "Off"}
+                </button>
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.05}
+                value={volume}
+                onChange={(e) => setVolume(Number(e.target.value))}
+                disabled={!soundOn}
+                aria-label="Rain volume"
+                className="mt-3 w-full accent-indigo-600 disabled:opacity-40"
+              />
+            </div>
+
+            <p className="text-xs text-slate-500">
+              The chime at the end of each session uses your device sound. Your settings and today&apos;s session count are
+              saved in this browser.
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
   );
 }
 
