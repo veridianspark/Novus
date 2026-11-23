@@ -1,225 +1,118 @@
-# 📚 SchoolSync
+# 🚀 Novus
 
-### Your school life, in sync.
+### Your student life, organized.
 
-SchoolSync is an AI-powered student productivity dashboard that turns messy school information into a clear, organized plan.
+Novus is an AI-powered student productivity workspace designed to simplify academic life. From turning chaotic class announcements into organized deadlines to generating flashcards, exploring electronics, managing expenses, and planning meetups, Novus brings essential student tools together in one platform.
 
-Students receive assignments, quizzes, presentations, deadlines, and announcements from many different places. SchoolSync brings them together and helps students understand **what needs to be done, when it is due, and what they should work on next.**
+🔗 **Live Demo:** https://schoolsync-tan.vercel.app/
 
 ---
 
 ## ✨ Features
 
-### 🤖 AI Schoolwork Organizer
-Paste messy school information such as:
+### 🤖 AI Academic Organizer
+- Convert messy academic messages into structured tasks.
+- Extract assignments, quizzes, presentations, deadlines, and other deliverables.
+- Upload or paste screenshots of chats, notices, and timetables.
+- Automatically identify task titles, subjects, deadlines, priorities, and estimated time.
+- AI-powered contextual understanding to filter conversational noise.
+- Rule-based fallback system for basic task extraction.
 
-> Biology quiz on Chapter 7 tomorrow.  
-> Math worksheet 4 is due Thursday.  
-> History presentation is due Monday.
+### 📅 Smart Study Planner
+- Adaptive 7-day study planning.
+- Distributes study workload across upcoming deadlines.
+- Configurable daily study-time limits.
+- Visual daily workload tracking.
+- Monthly calendar for deadlines.
+- Export tasks to your calendar using `.ics`.
 
-SchoolSync uses Google Gemini to identify:
+### 🧠 AI Flashcards
+- Generate flashcards from topics or lecture notes.
+- Active recall learning system.
+- Interactive flip cards.
+- Shuffle and navigate decks.
+- Topic-based revision.
 
-- 📚 Subject
-- 📝 Task
-- 📅 Deadline
-- 🔥 Priority
-- ⏱️ Estimated completion time
+### ⚡ Visual Lab — AI Electronics Tutor
+- Interactive electronics learning environment.
+- PN junction diode simulation.
+- Rectifier circuit visualization.
+- Waveform and filtering exploration.
+- Full-adder logic visualization.
+- Interactive logic gates.
+- Binary, octal, and hexadecimal conversions.
+- AI-powered electronics explanations.
 
-### 🎯 Smart Next Task
-SchoolSync analyzes your incomplete tasks and recommends what you should work on next based on priority and urgency.
+### 💰 Smart Spending Tracker
+- Track daily expenses in INR (₹).
+- Categorize expenses.
+- Set monthly budgets.
+- Spending distribution charts.
+- Monthly spending trends.
+- Personalized saving suggestions based on expenditure.
+- AI Spending Coach for financial insights and better money management.
 
-### 📅 Dynamic Calendar
-Tasks with recognizable deadlines automatically appear on the calendar, giving students a visual overview of upcoming work.
+### 📍 Meetup Planner
+- Add multiple participant locations.
+- AI-assisted location processing.
+- Find convenient central meetup locations.
+- Compare distances between participants.
+- Interactive map visualization.
 
-### ✅ Task Management
-Mark tasks as complete or incomplete and keep track of everything from one dashboard.
-
-### 📊 Progress Tracking
-See your overall completion percentage and how many tasks you've finished.
-
-### 💾 Persistent Tasks
-Tasks are stored locally so refreshing the page doesn't erase your work.
-
-### 🛡️ AI Fallback
-If the Gemini API is temporarily unavailable or reaches its quota, SchoolSync can fall back to local task processing so the application remains usable.
-
----
-
-## 🧠 How It Works
-
-```text
-Messy School Information
-          ↓
-      SchoolSync
-          ↓
-     Gemini AI
-          ↓
- ┌────────┼─────────┐
- ↓        ↓         ↓
-Tasks  Deadlines  Priority
-          ↓
-      Dashboard
-          ↓
- ┌────────┼─────────┐
- ↓        ↓         ↓
-Tasks   Calendar  Progress
-```
-
-Instead of manually organizing every assignment, students can simply provide the information they already have and let SchoolSync structure it.
+### 🍅 Pomodoro Focus Timer
+- Dedicated focus sessions.
+- Short and long breaks.
+- Track completed sessions.
+- Track accumulated focus time.
+- Designed to encourage productive study sessions.
 
 ---
 
 ## 🛠️ Tech Stack
 
-- **Next.js**
-- **React**
-- **TypeScript**
-- **Tailwind CSS**
-- **Google Gemini API**
-- **Vercel**
-- **LocalStorage**
+| Technology | Purpose |
+|---|---|
+| Next.js | Application framework |
+| React | UI development |
+| TypeScript | Type-safe development |
+| Tailwind CSS | Styling |
+| Google Gemini API | AI-powered functionalities |
+| Local Storage | Local data persistence |
+| Vercel | Deployment |
 
 ---
 
-## 🚀 Getting Started
+## 🧠 AI Architecture
 
-### 1. Clone the repository
+Novus utilizes a hybrid AI architecture combining Large Language Model reasoning with deterministic validation and fallback logic.
+
+### Workflow
+
+1. **Input:** Students provide academic messages, text, or screenshots.
+2. **Processing:** Inputs are sent to a server-side API route.
+3. **AI Inference:** Gemini interprets the information and extracts relevant academic tasks.
+4. **Structured Output:** Information is transformed into structured task data.
+5. **Validation:** Application logic validates task details and dates.
+6. **Fallback:** Rule-based parsing provides an alternative when AI processing is unavailable.
+7. **Planning:** Tasks are integrated into study plans, calendars, and recommendations.
+
+Additional AI integrations support flashcard generation, electronics tutoring, spending analysis, and meetup planning.
+
+---
+
+## 💻 Getting Started
+
+### Prerequisites
+
+- Node.js
+- npm
+- Google Gemini API Key
+- Groq API Key
+
+### Installation
+
+**1. Clone the repository**
 
 ```bash
-git clone https://github.com/YOUR-USERNAME/YOUR-REPOSITORY.git
-cd YOUR-REPOSITORY
-```
-
-### 2. Install dependencies
-
-```bash
-npm install
-```
-
-### 3. Create environment variables
-
-Create a `.env.local` file in the project root:
-
-```env
-GEMINI_API_KEY=your_gemini_api_key
-GEMINI_MODEL=gemini-3.8-flash
-```
-
-⚠️ **Never commit your API key to GitHub.**
-
-### 4. Run the development server
-
-```bash
-npm run dev
-```
-
-Then open:
-
-```text
-http://localhost:3000
-```
-
----
-
-## 🌐 Deployment
-
-SchoolSync can be deployed using Vercel.
-
-1. Push the project to GitHub.
-2. Import the repository into Vercel.
-3. Add your Gemini environment variables.
-4. Deploy.
-5. Open your Vercel production URL.
-
----
-
-## 📂 Project Structure
-
-```text
-schoolsync/
-├── app/
-│   ├── api/
-│   │   └── organise/
-│   │       └── route.ts
-│   ├── page.tsx
-│   ├── layout.tsx
-│   └── globals.css
-│
-├── public/
-├── package.json
-├── tsconfig.json
-└── README.md
-```
-
----
-
-## 💡 Example
-
-### Input
-
-```text
-Biology Chapter 7 quiz tomorrow.
-Math worksheet 4 due Friday.
-History presentation due Monday.
-Read English Chapter 12 by Friday.
-```
-
-### SchoolSync
-
-Automatically turns this into structured tasks with:
-
-| Task | Subject | Priority | Deadline |
-|---|---|---|---|
-| Biology Chapter 7 Quiz | Biology | High | Tomorrow |
-| Math Worksheet 4 | Mathematics | Medium | Friday |
-| History Presentation | History | Medium | Monday |
-| Read English Chapter 12 | English | Low | Friday |
-
-These tasks can then appear in the dashboard and calendar.
-
----
-
-## 🎯 Why SchoolSync?
-
-Students don't always struggle because they have too much work.
-
-They struggle because their work is **scattered**.
-
-Assignments can arrive through announcements, messages, emails, classroom platforms, notebooks, and conversations.
-
-SchoolSync turns that scattered information into one organized workspace.
-
-> **Spend less time organizing schoolwork. Spend more time learning.**
-
----
-
-## 🔮 Future Improvements
-
-- 📎 Assignment attachments
-- 🖼️ Image and screenshot analysis
-- 📝 Long-form note summarization
-- 🧠 AI study-plan generation
-- 🗺️ Automatic concept flowcharts
-- 🌍 Multi-language support
-- 🔔 Deadline reminders
-- 📆 Google Calendar integration
-- 📈 Study analytics
-- 👥 Collaborative study planning
-
----
-
-## 🏆 Hackathon Project
-
-SchoolSync was built to explore how AI can become part of a student's everyday workflow instead of simply acting as a chatbot.
-
-The goal is to make AI **useful, actionable, and simple**.
-
----
-
-## 👨‍💻 Built With
-
-Built with ❤️ using **Next.js, TypeScript, Tailwind CSS, and Google Gemini.**
-
-### 📚 SchoolSync
-
-**Your school life, in sync.**
+git clone <repository-url>
+cd <repository-folder>
