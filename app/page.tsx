@@ -1166,7 +1166,8 @@ export default function Home() {
         incoming.length === 0
           ? "No tasks were found in that text."
           : data.fallback
-          ? "The AI was unavailable, so tasks were added with basic parsing. Double-check the subjects and dates."
+          ? data.fallbackNote ||
+            "The AI was unavailable, so tasks were added with basic parsing. Double-check the subjects and dates."
           : "Tasks added. Anything that already existed was skipped."
       );
     } catch (err: any) {
@@ -3320,7 +3321,10 @@ function MeetupTab() {
 
         if (Array.isArray(data?.warnings)) setWarnings(data.warnings);
         if (data?.usedAi === false) {
-          setAiNote("The AI helper was unavailable, so plain search was used. Add city names for better accuracy.");
+          setAiNote(
+            data.aiNote ||
+              "The AI helper was unavailable, so plain search was used. Add city names for better accuracy."
+          );
         }
       }
 
