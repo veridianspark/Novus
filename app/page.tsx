@@ -43,11 +43,7 @@ type MeetupResult = {
   maxKm: number;
   minKm: number;
   gapKm: number;
-  distances: { id: number; name: string; km: number; minutes?: number }[];
-  avgMinutes?: number;
-  maxMinutes?: number;
-  minMinutes?: number;
-  gapMinutes?: number;
+  distances: { id: number; name: string; km: number }[];
   placeLabel?: string;
 };
 
@@ -733,7 +729,8 @@ const NOVUS_FLASHCARDS: { topic: string; question: string; answer: string }[] = 
 export default function Home() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loaded, setLoaded] = useState(false);
-  const [activeView, setActiveView] = useState<"dashboard" | "spending" | "flashcards" | "visuals" | "meetup" | "pomodoro">("dashboard");
+  const [activeView, setActiveView] = useState<"landing" | "dashboard" | "spending" | "flashcards" | "visuals" | "meetup" | "pomodoro">("landing");
+  const [darkMode, setDarkMode] = useState(false);
   const [flashcardIndex, setFlashcardIndex] = useState(0);
   const [flashcardFlipped, setFlashcardFlipped] = useState(false);
   const [flashcardTopic, setFlashcardTopic] = useState("All topics");
@@ -775,6 +772,14 @@ export default function Home() {
     nextId.current += 1;
     return id;
   }
+
+  useEffect(() => {
+    try { setDarkMode(localStorage.getItem("novus-dark-mode") === "true"); } catch {}
+  }, []);
+
+  useEffect(() => {
+    try { localStorage.setItem("novus-dark-mode", String(darkMode)); } catch {}
+  }, [darkMode]);
 
   /* ==================================================
      CLIENT-ONLY CLOCK VALUES
@@ -1274,7 +1279,7 @@ export default function Home() {
   }
 
   const navItems: ["dashboard" | "spending" | "flashcards" | "visuals" | "meetup" | "pomodoro", string][] = [
-    ["dashboard", "Dashboard"],
+    ["dashboard", "Workspace"],
     ["spending", "Spending"],
     ["flashcards", "Flashcards"],
     ["visuals", "Visual Lab"],
@@ -1283,13 +1288,32 @@ export default function Home() {
   ];
 
   return (
-    <main className="min-h-screen bg-[#f7f8fc] text-slate-900">
+    <main className={`novus-root min-h-screen bg-[#f7f8fc] text-slate-900 ${darkMode ? "dark-theme" : ""}`}>
+      <style jsx global>{`
+        .novus-root.dark-theme { background:#0b1020!important; color:#e5e7eb!important; }
+        .novus-root.dark-theme .bg-white { background-color:#111827!important; }
+        .novus-root.dark-theme .bg-white\/95 { background-color:rgba(17,24,39,.95)!important; }
+        .novus-root.dark-theme .bg-\[\#f7f8fc\] { background-color:#0b1020!important; }
+        .novus-root.dark-theme .bg-slate-50 { background-color:#172033!important; }
+        .novus-root.dark-theme .bg-slate-100 { background-color:#1e293b!important; }
+        .novus-root.dark-theme .bg-indigo-50 { background-color:#1e1b4b!important; }
+        .novus-root.dark-theme .text-slate-900,.novus-root.dark-theme .text-slate-950 { color:#f1f5f9!important; }
+        .novus-root.dark-theme .text-slate-800 { color:#e2e8f0!important; }
+        .novus-root.dark-theme .text-slate-700 { color:#cbd5e1!important; }
+        .novus-root.dark-theme .text-slate-600 { color:#cbd5e1!important; }
+        .novus-root.dark-theme .text-slate-500 { color:#94a3b8!important; }
+        .novus-root.dark-theme .text-slate-400 { color:#94a3b8!important; }
+        .novus-root.dark-theme .border-slate-100,.novus-root.dark-theme .border-slate-200,.novus-root.dark-theme .border-slate-300 { border-color:#334155!important; }
+        .novus-root.dark-theme input,.novus-root.dark-theme textarea,.novus-root.dark-theme select { background:#111827!important;color:#e5e7eb!important;border-color:#334155!important; }
+        .novus-root.dark-theme .hover\:bg-slate-100:hover { background:#263449!important; }
+        .novus-root.dark-theme .shadow-sm,.novus-root.dark-theme .shadow-md { box-shadow:0 8px 24px rgba(0,0,0,.25)!important; }
+      `}</style>
       {/* NAVIGATION */}
 
       <nav className="sticky top-0 z-50 border-b border-slate-200 bg-white/95 backdrop-blur">
         <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-6 py-4">
           <button
-            onClick={() => goTo("dashboard")}
+            onClick={() => setActiveView("landing")} 
             className="flex items-center gap-3 text-left"
           >
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-900 text-lg font-bold text-white">
@@ -1303,6 +1327,7 @@ export default function Home() {
           </button>
 
           <div className="flex flex-wrap items-center gap-4 text-sm font-medium sm:gap-6">
+            <button onClick={() => setActiveView("landing")} className={`transition ${activeView === "landing" ? "font-semibold text-indigo-600" : "text-slate-600 hover:text-indigo-600"}`}>Home</button>
             {navItems.map(([id, label]) => (
               <button
                 key={id}
@@ -1318,13 +1343,37 @@ export default function Home() {
             ))}
           </div>
 
-          <div className="hidden h-10 w-10 items-center justify-center rounded-full bg-indigo-100 font-semibold text-indigo-700 sm:flex">
-            S
+          <div className="flex items-center gap-2">
+            <button onClick={() => setDarkMode((v) => !v)} aria-label={darkMode ? "Switch to light mode" : "Switch to dark mode"} title={darkMode ? "Switch to light mode" : "Switch to dark mode"} className="rounded-xl border border-slate-200 px-3 py-2 text-sm transition hover:bg-slate-100">{darkMode ? "☀️ Light" : "🌙 Dark"}</button>
+            <div className="hidden h-10 w-10 items-center justify-center rounded-full bg-indigo-100 font-semibold text-indigo-700 sm:flex">N</div>
           </div>
         </div>
       </nav>
 
       <div className="mx-auto max-w-7xl px-6 py-10">
+        {activeView === "landing" && (
+          <section className="overflow-hidden rounded-[2rem] border border-slate-200 bg-white shadow-sm dark:shadow-none">
+            <div className="relative isolate overflow-hidden bg-gradient-to-br from-slate-950 via-indigo-950 to-violet-900 px-6 py-20 text-white sm:px-12 sm:py-28">
+              <div className="pointer-events-none absolute -right-20 -top-28 h-80 w-80 rounded-full bg-violet-500/30 blur-3xl"/>
+              <div className="pointer-events-none absolute -bottom-36 left-1/3 h-80 w-80 rounded-full bg-indigo-500/30 blur-3xl"/>
+              <div className="relative max-w-3xl">
+                <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-4 py-2 text-sm text-indigo-100 backdrop-blur"><span className="h-2 w-2 rounded-full bg-emerald-400"/> Your student life, in one place</div>
+                <h2 className="text-5xl font-black tracking-tight sm:text-7xl">Make room for<br/><span className="bg-gradient-to-r from-indigo-300 via-violet-200 to-fuchsia-200 bg-clip-text text-transparent">what matters.</span></h2>
+                <p className="mt-6 max-w-xl text-lg leading-8 text-slate-300">Meet Novus — a smarter workspace for your studies, plans, focus sessions and everyday decisions.</p>
+                <div className="mt-9 flex flex-wrap gap-3"><button onClick={() => setActiveView("dashboard")} className="rounded-xl bg-white px-6 py-3 font-bold text-slate-950 shadow-lg transition hover:-translate-y-0.5">Open workspace ↗</button><button onClick={() => setActiveView("meetup")} className="rounded-xl border border-white/25 bg-white/10 px-6 py-3 font-semibold text-white backdrop-blur transition hover:bg-white/15">Plan a meetup</button></div>
+              </div>
+              <div className="relative mt-16 grid grid-cols-2 gap-3 sm:grid-cols-3">
+                {[ ["dashboard","✦","Smart dashboard","Organise your day"],["spending","◈","Spending","Track your budget"],["flashcards","▤","Flashcards","Learn actively"],["visuals","✧","Visual Lab","Explore ideas"],["meetup","⌖","Meetup","Find a fair meeting point"],["pomodoro","◷","Focus timer","Protect your focus"] ].map(([id,icon,name,desc]) => (
+                  <button key={id} onClick={() => setActiveView(id as any)} className="group rounded-2xl border border-white/10 bg-white/[0.07] p-5 text-left backdrop-blur-md transition hover:-translate-y-1 hover:border-white/25 hover:bg-white/[0.12]">
+                    <span className="text-2xl">{icon}</span><h3 className="mt-4 font-bold">{name}</h3><p className="mt-1 text-sm text-slate-300">{desc}</p><span className="mt-4 block text-sm text-indigo-200 opacity-0 transition group-hover:opacity-100">Open ↗</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-4 px-6 py-5 text-sm text-slate-500 sm:px-10"><span>Designed to bring your day together.</span><button onClick={() => setActiveView("dashboard")} className="font-semibold text-indigo-600 hover:text-indigo-700">Go to dashboard →</button></div>
+          </section>
+        )}
+
         {activeView === "dashboard" && (
           <>
             {/* ==================================================
@@ -3132,59 +3181,523 @@ function PomodoroTab({ tasks, active }: { tasks: Task[]; active: boolean }) {
 }
 
 /* ==================================================
-   MEETUP TAB COMPONENT — ROAD-NETWORK FAIRNESS
+   MEETUP TAB COMPONENT (AI location detection)
 ================================================== */
+
+/* ==================================================
+   LEAFLET LOADER (loads once, safe against races)
+================================================== */
+
 let leafletPromise: Promise<any> | null = null;
+
 function loadLeaflet(): Promise<any> {
   if (typeof window === "undefined") return Promise.reject(new Error("no window"));
   const w = window as any;
   if (w.L) return Promise.resolve(w.L);
   if (leafletPromise) return leafletPromise;
+
   leafletPromise = new Promise((resolve, reject) => {
     if (!document.getElementById("leaflet-css")) {
-      const link = document.createElement("link"); link.id = "leaflet-css"; link.rel = "stylesheet";
-      link.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"; document.head.appendChild(link);
+      const link = document.createElement("link");
+      link.id = "leaflet-css";
+      link.rel = "stylesheet";
+      link.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
+      document.head.appendChild(link);
     }
-    const script = document.createElement("script"); script.id = "leaflet-js";
-    script.src = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"; script.async = true;
+
+    const script = document.createElement("script");
+    script.id = "leaflet-js";
+    script.src = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js";
+    script.async = true;
     script.onload = () => resolve((window as any).L);
-    script.onerror = () => { leafletPromise = null; reject(new Error("Could not load the map.")); };
+    script.onerror = () => {
+      leafletPromise = null;
+      reject(new Error("Could not load the map."));
+    };
     document.body.appendChild(script);
-  }); return leafletPromise;
+  });
+
+  return leafletPromise;
 }
-function escapeHtml(value: string): string { return value.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+/* ==================================================
+   COMPONENT
+================================================== */
 
 function MeetupTab() {
-  const [people,setPeople]=useState<PersonPoint[]>([{id:1,name:"Person 1",query:"",lat:null,lon:null},{id:2,name:"Person 2",query:"",lat:null,lon:null}]);
-  const [result,setResult]=useState<MeetupResult|null>(null); const [warnings,setWarnings]=useState<string[]>([]);
-  const [aiNote,setAiNote]=useState(""); const [loading,setLoading]=useState(false); const [error,setError]=useState(""); const [mapError,setMapError]=useState("");
-  const mapContainerRef=useRef<HTMLDivElement|null>(null); const mapInstanceRef=useRef<any>(null); const nextId=useRef(3);
-  const [routes,setRoutes]=useState<any[]>([]);
-  function addPerson(){if(people.length>=8)return;const id=nextId.current++;setPeople(c=>[...c,{id,name:`Person ${c.length+1}`,query:"",lat:null,lon:null}]);}
-  function removePerson(id:number){if(people.length<=2)return;setPeople(c=>c.filter(p=>p.id!==id));setResult(null);setRoutes([]);}
-  function updatePerson(id:number,patch:Partial<PersonPoint>){setPeople(c=>c.map(p=>p.id===id?{...p,...patch,...(patch.query!==undefined?{lat:null,lon:null,resolvedName:undefined,confidence:undefined}:{})}:p));if(patch.query!==undefined){setResult(null);setRoutes([]);}}
-  function useMyLocation(id:number){if(!navigator.geolocation){setError("Your browser can't share its location.");return;}setError("");navigator.geolocation.getCurrentPosition(async pos=>{const lat=pos.coords.latitude,lon=pos.coords.longitude;let label="My current location";try{const res=await fetch("/api/organise",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"reverse",lat,lon})});const d=await res.json();if(d?.label)label=d.label;}catch{}setPeople(c=>c.map(p=>p.id===id?{...p,query:label,lat,lon,resolvedName:label,confidence:"exact"}:p));setResult(null);},()=>setError("Couldn't get your location. Check browser location permission."),{enableHighAccuracy:true,timeout:10000});}
-  async function calculateMeetup(){setError("");setWarnings([]);setAiNote("");setRoutes([]);const filled=people.filter(p=>p.query.trim());if(filled.length<2){setError("Enter starting locations for at least 2 people.");return;}setLoading(true);
-    try{const unresolved=filled.filter(p=>p.lat==null||p.lon==null);const resolved=new Map<number,PersonPoint>();filled.filter(p=>p.lat!=null&&p.lon!=null).forEach(p=>resolved.set(p.id,p));
-      if(unresolved.length){const res=await fetch("/api/organise",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"locate",queries:filled.map(p=>({id:p.id,name:p.name,query:p.query.trim()}))})});const d=await res.json();if(!res.ok)throw new Error(d?.error||"Location lookup failed.");for(const p of unresolved){const x=d.results?.find((v:any)=>v.id===p.id);if(x&&x.lat!=null&&x.lon!=null)resolved.set(p.id,{...p,lat:x.lat,lon:x.lon,resolvedName:x.displayName||x.interpreted||p.query,confidence:x.confidence});else resolved.set(p.id,{...p,confidence:"not_found"});}if(Array.isArray(d.warnings))setWarnings(d.warnings);if(d.usedAi===false)setAiNote(d.aiNote||"AI unavailable; plain search used. Add city names for better accuracy.");}
-      setPeople(c=>c.map(p=>resolved.get(p.id)||p));const missing=filled.filter(p=>resolved.get(p.id)?.lat==null);if(missing.length)throw new Error(`Couldn't find: ${missing.map(p=>`${p.name} (${p.query})`).join(", ")}. Try adding a city or landmark.`);
-      const pts=filled.map(p=>{const q=resolved.get(p.id)!;return{id:p.id,name:p.name,lat:q.lat as number,lon:q.lon as number};});
-      // Server finds a fair point using actual road-network travel times, not straight-line distances.
-      const res=await fetch("/api/organise",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"roadMeetup",points:pts})});const d=await res.json();if(!res.ok)throw new Error(d?.error||"Road-based midpoint calculation failed.");setResult(d.result);setRoutes(d.routes||[]);
-    }catch(e:any){setResult(null);setError(e?.message||"Failed to calculate meetup.");}finally{setLoading(false);}}
-  const pointsKey=JSON.stringify([people.map(p=>[p.id,p.name,p.lat,p.lon]),result?[result.lat,result.lon]:null,routes]);
-  useEffect(()=>{let cancelled=false;async function render(){if(!mapContainerRef.current)return;let L:any;try{L=await loadLeaflet();setMapError("");}catch(e:any){setMapError(e?.message||"Could not load map.");return;}if(cancelled||!mapContainerRef.current)return;if(mapInstanceRef.current){mapInstanceRef.current.remove();mapInstanceRef.current=null;}const valid=people.filter(p=>p.lat!=null&&p.lon!=null) as (PersonPoint&{lat:number;lon:number})[];const map=L.map(mapContainerRef.current).setView([result?.lat??valid[0]?.lat??12.9716,result?.lon??valid[0]?.lon??77.5946],12);mapInstanceRef.current=map;L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{attribution:"&copy; OpenStreetMap contributors",maxZoom:19}).addTo(map);const bounds:any[]=[];
-      for(const p of valid){bounds.push([p.lat,p.lon]);L.marker([p.lat,p.lon]).addTo(map).bindPopup(`<b>${escapeHtml(p.name)}</b><br/>${escapeHtml(p.resolvedName||"")}`);}
-      if(result){bounds.push([result.lat,result.lon]);L.marker([result.lat,result.lon]).addTo(map).bindPopup(`<b>Road-balanced meeting point</b><br/>${escapeHtml(result.placeLabel||"")}`);}
-      for(const r of routes){if(Array.isArray(r.coordinates)&&r.coordinates.length){const coords=r.coordinates.map((c:any)=>[c[1],c[0]]);L.polyline(coords,{color:"#4f46e5",weight:4,opacity:.8}).addTo(map);bounds.push(...coords);}}
-      if(bounds.length>1)map.fitBounds(bounds,{padding:[36,36]});else if(bounds.length)map.setView(bounds[0],14);
-    }void render();return()=>{cancelled=true;if(mapInstanceRef.current){mapInstanceRef.current.remove();mapInstanceRef.current=null;}};},[pointsKey]);
-  function statusChip(p:PersonPoint){if(p.confidence==="exact")return <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-bold text-emerald-700">Found</span>;if(p.confidence==="approximate")return <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-bold text-amber-700">Approximate</span>;if(p.confidence==="not_found")return <span className="rounded-full bg-red-50 px-2 py-0.5 text-[11px] font-bold text-red-600">Not found</span>;return null;}
-  return <section id="meetup" className="scroll-mt-28 space-y-6"><div><p className="text-xs font-bold uppercase tracking-widest text-indigo-600">Location &amp; Distance</p><h2 className="mt-1 text-3xl font-bold">Best meeting point</h2><p className="mt-2 text-slate-500">Find a meeting spot that balances real road travel times for everyone. Routing follows roads instead of measuring straight-line distances.</p></div>
-    <div className="grid gap-6 lg:grid-cols-2"><div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm"><div className="flex items-center justify-between"><h3 className="text-xl font-bold">Participants ({people.length})</h3><button type="button" onClick={addPerson} disabled={people.length>=8} className="rounded-xl border px-3 py-1.5 text-sm font-semibold hover:bg-slate-50 disabled:opacity-40">+ Add person</button></div><div className="mt-4 space-y-3">{people.map((p,i)=><div key={p.id} className="rounded-xl bg-slate-50 p-3"><div className="flex flex-col gap-2 sm:flex-row sm:items-center"><input value={p.name} onChange={e=>updatePerson(p.id,{name:e.target.value})} placeholder={`Person ${i+1}`} className="w-full rounded-xl border bg-white px-3 py-2 text-sm font-medium sm:w-36"/><input value={p.query} onChange={e=>updatePerson(p.id,{query:e.target.value})} placeholder="Neighbourhood, landmark, address…" className="flex-1 rounded-xl border bg-white px-3 py-2 text-sm outline-none focus:border-indigo-400"/><button type="button" onClick={()=>useMyLocation(p.id)} title="Use my current location" className="rounded-lg px-2.5 py-2 text-sm text-slate-500 hover:bg-indigo-50">📍</button>{people.length>2&&<button type="button" onClick={()=>removePerson(p.id)} className="rounded-lg px-2.5 py-2 text-sm text-slate-400 hover:bg-red-50">✕</button>}</div>{p.confidence&&<div className="mt-2 flex items-start gap-2 text-xs text-slate-500">{statusChip(p)}{p.resolvedName&&<span className="break-words">{p.resolvedName}</span>}</div>}</div>)}</div>
-      {error&&<div role="alert" className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}{warnings.length>0&&<div role="status" className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800"><ul className="list-disc space-y-1 pl-5">{warnings.map(w=><li key={w}>{w}</li>)}</ul></div>}{aiNote&&<p className="mt-3 text-xs text-slate-500">{aiNote}</p>}<button type="button" onClick={calculateMeetup} disabled={loading} className="mt-5 w-full rounded-xl bg-indigo-600 px-5 py-3 font-semibold text-white transition hover:bg-indigo-700 disabled:opacity-50">{loading?"✨ Finding fair road-based spot…":"✨ Find road-balanced meeting point"}</button></div>
-      <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm"><h3 className="text-xl font-bold">Road travel summary</h3>{!result?<p className="mt-4 text-sm text-slate-500">Enter at least two starting locations. The result optimizes driving travel time via roads.</p>:<div className="mt-4 space-y-4"><div className="grid gap-3 sm:grid-cols-2"><div className="rounded-2xl bg-slate-950 p-4 text-white"><p className="text-xs text-slate-400">Average drive</p><p className="mt-1 text-3xl font-bold">{result.avgMinutes!=null?Math.round(result.avgMinutes):"—"} min</p></div><div className="rounded-2xl bg-emerald-50 p-4"><p className="text-xs font-semibold text-emerald-700">Longest drive</p><p className="mt-1 text-3xl font-bold text-emerald-900">{result.maxMinutes!=null?Math.round(result.maxMinutes):"—"} min</p></div></div><p className="rounded-xl bg-indigo-50 px-3.5 py-2.5 text-sm text-indigo-800">⚖️ Drive-time spread: {result.minMinutes!=null?Math.round(result.minMinutes):"—"}–{result.maxMinutes!=null?Math.round(result.maxMinutes):"—"} minutes (gap {result.gapMinutes!=null?Math.round(result.gapMinutes):"—"} min). Candidate selection allows a small fairness tolerance in favour of reachable roads.</p><div className="rounded-xl bg-slate-50 p-3.5 text-sm"><p className="font-semibold text-slate-800">Recommended meeting area</p><p className="mt-0.5 font-mono text-xs text-slate-600">{result.lat.toFixed(5)}, {result.lon.toFixed(5)}</p>{result.placeLabel&&<p className="mt-1 text-xs text-slate-500">Near: {result.placeLabel}</p>}<a href={`https://www.google.com/maps/search/?api=1&query=${result.lat},${result.lon}`} target="_blank" rel="noreferrer" className="mt-2 inline-block text-xs font-semibold text-indigo-600 hover:underline">Open point in Google Maps →</a></div><div className="divide-y rounded-xl border border-slate-100">{result.distances.map(d=><div key={d.id} className="flex items-center justify-between px-4 py-2.5 text-sm"><span className="font-medium text-slate-700">{d.name}</span><span className="text-right font-semibold text-slate-900">{d.minutes!=null?`${Math.round(d.minutes)} min · ${d.km.toFixed(1)} km`: `${d.km.toFixed(1)} km`}</span></div>)}</div></div>}</div></div>
-    <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm"><h3 className="text-xl font-bold">Road map</h3><p className="mt-1 text-sm text-slate-500">Participant routes are drawn along mapped roads, with the suggested location marked.</p>{mapError&&<p className="mt-2 text-sm text-red-600">{mapError}</p>}<div ref={mapContainerRef} className="mt-4 h-96 w-full overflow-hidden rounded-2xl border bg-slate-100"/></div></section>;
+  const [people, setPeople] = useState<PersonPoint[]>([
+    { id: 1, name: "Person 1", query: "", lat: null, lon: null },
+    { id: 2, name: "Person 2", query: "", lat: null, lon: null },
+  ]);
+  const [result, setResult] = useState<MeetupResult | null>(null);
+  const [warnings, setWarnings] = useState<string[]>([]);
+  const [aiNote, setAiNote] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [mapError, setMapError] = useState("");
+
+  const mapContainerRef = useRef<HTMLDivElement | null>(null);
+  const mapInstanceRef = useRef<any>(null);
+  const nextId = useRef(3);
+
+  function addPerson() {
+    if (people.length >= 8) return;
+    const id = nextId.current++;
+    setPeople((curr) => [
+      ...curr,
+      { id, name: `Person ${curr.length + 1}`, query: "", lat: null, lon: null },
+    ]);
+  }
+
+  function removePerson(id: number) {
+    if (people.length <= 2) return;
+    setPeople((curr) => curr.filter((p) => p.id !== id));
+    setResult(null);
+  }
+
+  function updatePerson(id: number, patch: Partial<PersonPoint>) {
+    setPeople((curr) =>
+      curr.map((p) =>
+        p.id === id
+          ? {
+              ...p,
+              ...patch,
+              // Editing the place invalidates the previous lookup.
+              ...(patch.query !== undefined
+                ? { lat: null, lon: null, resolvedName: undefined, confidence: undefined }
+                : {}),
+            }
+          : p
+      )
+    );
+    if (patch.query !== undefined) setResult(null);
+  }
+
+  function useMyLocation(id: number) {
+    if (!navigator.geolocation) {
+      setError("Your browser can't share its location.");
+      return;
+    }
+    setError("");
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        const lat = pos.coords.latitude;
+        const lon = pos.coords.longitude;
+        let label = "My current location";
+        try {
+          const res = await fetch("/api/organise", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "reverse", lat, lon }),
+          });
+          const data = await res.json();
+          if (data?.label) label = data.label;
+        } catch {
+          // keep the generic label
+        }
+        setPeople((curr) =>
+          curr.map((p) =>
+            p.id === id
+              ? { ...p, query: label, lat, lon, resolvedName: label, confidence: "exact" }
+              : p
+          )
+        );
+        setResult(null);
+      },
+      () => setError("Couldn't get your location. Check the browser's location permission."),
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  }
+
+  async function calculateMeetup() {
+    setError("");
+    setWarnings([]);
+    setAiNote("");
+
+    const filled = people.filter((p) => p.query.trim().length > 0);
+    if (filled.length < 2) {
+      setError("Enter starting locations for at least 2 people.");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      // People who already have coordinates (e.g. "use my location") skip the lookup.
+      const needLookup = filled.filter((p) => p.lat === null || p.lon === null);
+      const resolved = new Map<number, PersonPoint>();
+      filled.forEach((p) => {
+        if (p.lat !== null && p.lon !== null) resolved.set(p.id, p);
+      });
+
+      if (needLookup.length > 0) {
+        // Send everyone so the AI can use the other entries to pick the right city.
+        const res = await fetch("/api/organise", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "locate",
+            queries: filled.map((p) => ({ id: p.id, name: p.name, query: p.query.trim() })),
+          }),
+        });
+
+        let data: any = null;
+        try {
+          data = await res.json();
+        } catch {
+          throw new Error("The server sent back something unreadable. Try again.");
+        }
+        if (!res.ok) throw new Error(data?.error || "Could not look up those locations.");
+
+        const results: any[] = Array.isArray(data?.results) ? data.results : [];
+        for (const p of needLookup) {
+          const r = results.find((x) => x.id === p.id);
+          if (r && r.lat != null && r.lon != null) {
+            resolved.set(p.id, {
+              ...p,
+              lat: r.lat,
+              lon: r.lon,
+              resolvedName: r.displayName || r.interpreted || p.query,
+              confidence: r.confidence,
+            });
+          } else {
+            resolved.set(p.id, { ...p, confidence: "not_found" });
+          }
+        }
+
+        if (Array.isArray(data?.warnings)) setWarnings(data.warnings);
+        if (data?.usedAi === false) {
+          setAiNote(
+            data.aiNote ||
+              "The AI helper was unavailable, so plain search was used. Add city names for better accuracy."
+          );
+        }
+      }
+
+      setPeople((curr) => curr.map((p) => resolved.get(p.id) ?? p));
+
+      const missing = filled.filter((p) => resolved.get(p.id)?.lat == null);
+      if (missing.length > 0) {
+        throw new Error(
+          `Couldn't find: ${missing.map((p) => `${p.name} ("${p.query}")`).join(", ")}. Try adding a city or a nearby landmark.`
+        );
+      }
+
+      const best = computeBestMeetingPoint(
+        filled.map((p) => {
+          const r = resolved.get(p.id)!;
+          return { id: p.id, name: p.name, lat: r.lat as number, lon: r.lon as number };
+        })
+      );
+
+      try {
+        const revRes = await fetch("/api/organise", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "reverse", lat: best.lat, lon: best.lon }),
+        });
+        const rev = await revRes.json();
+        if (rev?.label) best.placeLabel = String(rev.label);
+      } catch {
+        // label is optional
+      }
+
+      setResult(best);
+    } catch (err: any) {
+      setResult(null);
+      setError(err?.message || "Failed to calculate meeting point.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  /* ---------------- Map ---------------- */
+
+  // Only redraw when the actual points change, not on every keystroke.
+  const pointsKey = JSON.stringify([
+    people.map((p) => [p.id, p.name, p.lat, p.lon]),
+    result ? [result.lat, result.lon] : null,
+  ]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function renderMap() {
+      if (!mapContainerRef.current) return;
+
+      let L: any;
+      try {
+        L = await loadLeaflet();
+        setMapError("");
+      } catch (err: any) {
+        setMapError(err?.message || "Could not load the map.");
+        return;
+      }
+      if (cancelled || !mapContainerRef.current) return;
+
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.remove();
+        mapInstanceRef.current = null;
+      }
+
+      const validPoints = people.filter((p) => p.lat !== null && p.lon !== null) as (PersonPoint & {
+        lat: number;
+        lon: number;
+      })[];
+
+      const centerLat = result ? result.lat : validPoints[0]?.lat ?? 12.9716;
+      const centerLon = result ? result.lon : validPoints[0]?.lon ?? 77.5946;
+
+      const map = L.map(mapContainerRef.current).setView([centerLat, centerLon], 12);
+      mapInstanceRef.current = map;
+
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        attribution: "&copy; OpenStreetMap contributors",
+        maxZoom: 19,
+      }).addTo(map);
+
+      const latLngs: [number, number][] = [];
+
+      for (const p of validPoints) {
+        latLngs.push([p.lat, p.lon]);
+        L.marker([p.lat, p.lon])
+          .addTo(map)
+          .bindPopup(`<b>${escapeHtml(p.name)}</b><br/>${escapeHtml(p.resolvedName || "")}`);
+
+        if (result) {
+          L.polyline(
+            [
+              [p.lat, p.lon],
+              [result.lat, result.lon],
+            ],
+            { color: "#4f46e5", weight: 2, dashArray: "5, 6" }
+          ).addTo(map);
+        }
+      }
+
+      if (result) {
+        latLngs.push([result.lat, result.lon]);
+        L.circleMarker([result.lat, result.lon], {
+          radius: 10,
+          color: "#059669",
+          fillColor: "#10b981",
+          fillOpacity: 0.9,
+        })
+          .addTo(map)
+          .bindPopup(`<b>Best Meeting Point</b><br/>Avg: ${result.avgKm.toFixed(1)} km`);
+      }
+
+      if (latLngs.length > 1) {
+        map.fitBounds(latLngs, { padding: [36, 36] });
+      }
+    }
+
+    void renderMap();
+
+    return () => {
+      cancelled = true;
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.remove();
+        mapInstanceRef.current = null;
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pointsKey]);
+
+  /* ---------------- Render ---------------- */
+
+  function statusChip(p: PersonPoint) {
+    if (p.confidence === "exact") {
+      return <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-bold text-emerald-700">Found</span>;
+    }
+    if (p.confidence === "approximate") {
+      return <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-bold text-amber-700">Approximate</span>;
+    }
+    if (p.confidence === "not_found") {
+      return <span className="rounded-full bg-red-50 px-2 py-0.5 text-[11px] font-bold text-red-600">Not found</span>;
+    }
+    return null;
+  }
+
+  return (
+    <section id="meetup" className="scroll-mt-28 space-y-6">
+      <div>
+        <p className="text-xs font-bold uppercase tracking-widest text-indigo-600">
+          Location &amp; Distance
+        </p>
+        <h2 className="mt-1 text-3xl font-bold">Best meeting point</h2>
+        <p className="mt-2 text-slate-500">
+          Type places any way you like: a neighbourhood, a landmark, a nickname, even with typos. AI works out where
+          each one is, using everyone&apos;s entries to pick the right city.
+        </p>
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="flex items-center justify-between">
+            <h3 className="text-xl font-bold">Participants ({people.length})</h3>
+            <button
+              type="button"
+              onClick={addPerson}
+              disabled={people.length >= 8}
+              className="rounded-xl border border-slate-200 px-3 py-1.5 text-sm font-semibold hover:bg-slate-50 disabled:opacity-40"
+            >
+              + Add person
+            </button>
+          </div>
+
+          <div className="mt-4 space-y-3">
+            {people.map((person, idx) => (
+              <div key={person.id} className="rounded-xl bg-slate-50 p-3">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                  <input
+                    value={person.name}
+                    onChange={(e) => updatePerson(person.id, { name: e.target.value })}
+                    placeholder={`Person ${idx + 1}`}
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium sm:w-36"
+                  />
+                  <input
+                    value={person.query}
+                    onChange={(e) => updatePerson(person.id, { query: e.target.value })}
+                    placeholder="e.g. koramangla 5th block, or Phoenix Mall"
+                    className="flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-indigo-400"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => useMyLocation(person.id)}
+                    title="Use my current location"
+                    aria-label={`Use my current location for ${person.name}`}
+                    className="rounded-lg px-2.5 py-2 text-sm text-slate-500 hover:bg-indigo-50 hover:text-indigo-600"
+                  >
+                    📍
+                  </button>
+                  {people.length > 2 && (
+                    <button
+                      type="button"
+                      onClick={() => removePerson(person.id)}
+                      aria-label={`Remove ${person.name}`}
+                      className="rounded-lg px-2.5 py-2 text-sm text-slate-400 hover:bg-red-50 hover:text-red-500"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+
+                {person.confidence && (
+                  <div className="mt-2 flex items-start gap-2 text-xs text-slate-500">
+                    {statusChip(person)}
+                    {person.resolvedName && (
+                      <span className="min-w-0 break-words">{person.resolvedName}</span>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+
+          {error && (
+            <div role="alert" className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              {error}
+            </div>
+          )}
+
+          {warnings.length > 0 && (
+            <div role="status" className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              <ul className="list-disc space-y-1 pl-5">
+                {warnings.map((w) => (
+                  <li key={w}>{w}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {aiNote && <p className="mt-3 text-xs text-slate-500">{aiNote}</p>}
+
+          <button
+            type="button"
+            onClick={calculateMeetup}
+            disabled={loading}
+            className="mt-5 w-full rounded-xl bg-indigo-600 px-5 py-3 font-semibold text-white transition hover:bg-indigo-700 disabled:opacity-50"
+          >
+            {loading ? "✨ Finding locations…" : "✨ Find best meeting point"}
+          </button>
+        </div>
+
+        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <h3 className="text-xl font-bold">Distance summary</h3>
+
+          {!result ? (
+            <p className="mt-4 text-sm text-slate-500">
+              Enter at least two locations and click the button to see the common average distance and each
+              person&apos;s distance.
+            </p>
+          ) : (
+            <div className="mt-4 space-y-4">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="rounded-2xl bg-slate-950 p-4 text-white">
+                  <p className="text-xs text-slate-400">Common average distance</p>
+                  <p className="mt-1 text-3xl font-bold">{result.avgKm.toFixed(1)} km</p>
+                </div>
+                <div className="rounded-2xl bg-emerald-50 p-4">
+                  <p className="text-xs font-semibold text-emerald-700">Farthest leg</p>
+                  <p className="mt-1 text-3xl font-bold text-emerald-900">{result.maxKm.toFixed(1)} km</p>
+                </div>
+              </div>
+
+              <p className="rounded-xl bg-indigo-50 px-3.5 py-2.5 text-sm text-indigo-800">
+                ⚖️ Fair split: everyone travels between <b>{result.minKm.toFixed(1)} km</b> and{" "}
+                <b>{result.maxKm.toFixed(1)} km</b> (gap {result.gapKm.toFixed(1)} km).
+              </p>
+
+              <div className="rounded-xl bg-slate-50 p-3.5 text-sm">
+                <p className="font-semibold text-slate-800">Recommended coordinates</p>
+                <p className="mt-0.5 font-mono text-xs text-slate-600">
+                  {result.lat.toFixed(5)}, {result.lon.toFixed(5)}
+                </p>
+                {result.placeLabel && <p className="mt-1 text-xs text-slate-500">Near: {result.placeLabel}</p>}
+                <a
+                  href={`https://www.google.com/maps/search/?api=1&query=${result.lat},${result.lon}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="mt-2 inline-block text-xs font-semibold text-indigo-600 hover:underline"
+                >
+                  Open point in Google Maps →
+                </a>
+              </div>
+
+              <div className="divide-y rounded-xl border border-slate-100">
+                {result.distances.map((d) => (
+                  <div key={d.id} className="flex items-center justify-between px-4 py-2.5 text-sm">
+                    <span className="font-medium text-slate-700">{d.name}</span>
+                    <span className="font-semibold text-slate-900">{d.km.toFixed(1)} km</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+        <h3 className="text-xl font-bold">Map view</h3>
+        <p className="mt-1 text-sm text-slate-500">
+          Shows participant markers, dashed legs, and the calculated meeting point.
+        </p>
+        {mapError && <p className="mt-2 text-sm text-red-600">{mapError}</p>}
+        <div
+          ref={mapContainerRef}
+          className="mt-4 h-96 w-full overflow-hidden rounded-2xl border border-slate-200 bg-slate-100"
+        />
+      </div>
+    </section>
+  );
 }
 
 function VisualLabCard({title,children,tag}:{title:string;children:any;tag?:string}) { return <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7"><div className="mb-4 flex items-center justify-between"><h3 className="text-xl font-bold">{title}</h3>{tag&&<span className="rounded-full bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-700">{tag}</span>}</div>{children}</div>; }
