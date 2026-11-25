@@ -1255,6 +1255,32 @@ async function resolveOne(
 /* ---------------- Public handler ---------------- */
 
 async function handleMeetupAction(body: any): Promise<NextResponse> {
+  if (body?.action === "roadMeetup") {
+    const points = Array.isArray(body.points) ? body.points.slice(0, MAX_PEOPLE).map((p:any)=>({id:Number(p.id),name:String(p.name||`Person ${p.id}`),lat:Number(p.lat),lon:Number(p.lon)})).filter((p:any)=>validCoords(p.lat,p.lon)) : [];
+    if(points.length<2) return NextResponse.json({error:"At least two valid participant locations are required."},{status:400});
+    try {
+      // Search a grid of nearby network-accessible candidate locations, then rank by
+      // OSRM travel-time fairness. A local grid is intentionally bounded and coarse.
+      const centerLat=points.reduce((s:any,p:any)=>s+p.lat,0)/points.length;
+      const centerLon=points.reduce((s:any,p:any)=>s+p.lon,0)/points.length;
+      const latStep=0.018, lonStep=0.018/Math.max(0.25,Math.cos(centerLat*Math.PI/180));
+      const offsets=[-2,-1,0,1,2];
+      const rawCandidates=offsets.flatMap((a:number)=>offsets.map((b:number)=>({lat:centerLat+a*latStep,lon:centerLon+b*lonStep})));
+      const coordStr=[...points.map((p:any)=>`${p.lon},${p.lat}`),...rawCandidates.map((p:any)=>`${p.lon},${p.lat}`)].join(";");
+      const srcIdx=points.map((_:any,i:number)=>i).join(";"); const dstIdx=rawCandidates.map((_:any,i:number)=>points.length+i).join(";");
+      const tableUrl=`https://router.project-osrm.org/table/v1/driving/${coordStr}?sources=${srcIdx}&destinations=${dstIdx}&annotations=duration,distance`;
+      const tableRes=await fetch(tableUrl,{signal:AbortSignal.timeout(18000)});if(!tableRes.ok)throw new Error("Road routing service unavailable");const table=await tableRes.json();
+      if(!Array.isArray(table.durations))throw new Error("No road travel times returned");
+      let bestIndex=-1,bestCost=Infinity;
+      for(let j=0;j<rawCandidates.length;j++){const times=points.map((_:any,i:number)=>table.durations?.[i]?.[j]);if(times.some((t:any)=>t==null))continue;const mx=Math.max(...times),mn=Math.min(...times),avg=times.reduce((a:number,b:number)=>a+b,0)/times.length;const cost=mx+0.35*(mx-mn)+0.12*avg;if(cost<bestCost){bestCost=cost;bestIndex=j;}}
+      if(bestIndex<0)throw new Error("No candidate was reachable by road for everyone");
+      const candidate=rawCandidates[bestIndex];const times=points.map((_:any,i:number)=>table.durations[i][bestIndex]);const kms=points.map((_:any,i:number)=>table.distances[i][bestIndex]/1000);
+      const routes=[];for(let i=0;i<points.length;i++){const url=`https://router.project-osrm.org/route/v1/driving/${points[i].lon},${points[i].lat};${candidate.lon},${candidate.lat}?overview=full&geometries=geojson`;const rr=await fetch(url,{signal:AbortSignal.timeout(12000)});if(rr.ok){const rd=await rr.json();if(rd.routes?.[0])routes.push({id:points[i].id,coordinates:rd.routes[0].geometry.coordinates});}}
+      let placeLabel:string|undefined;try{placeLabel=await nominatimReverse(candidate.lat,candidate.lon);}catch{}
+      const mins=times.map((x:number)=>x/60);const result={lat:candidate.lat,lon:candidate.lon,avgKm:kms.reduce((a:number,b:number)=>a+b,0)/kms.length,maxKm:Math.max(...kms),minKm:Math.min(...kms),gapKm:Math.max(...kms)-Math.min(...kms),avgMinutes:mins.reduce((a:number,b:number)=>a+b,0)/mins.length,maxMinutes:Math.max(...mins),minMinutes:Math.min(...mins),gapMinutes:Math.max(...mins)-Math.min(...mins),distances:points.map((p:any,i:number)=>({id:p.id,name:p.name,km:kms[i],minutes:mins[i]})),placeLabel};
+      return NextResponse.json({result,routes});
+    }catch(e:any){return NextResponse.json({error:e?.message||"Road-based meetup calculation failed."},{status:503});}
+  }
   if (body?.action === "reverse") {
     const lat = Number(body.lat);
     const lon = Number(body.lon);
@@ -1351,7 +1377,7 @@ export async function POST(request: NextRequest) {
 
   try {
     // Meetup tab: AI-assisted location detection (and reverse geocoding).
-    if (body?.action === "locate" || body?.action === "reverse") {
+    if (body?.action === "locate" || body?.action === "reverse" || body?.action === "roadMeetup") {
       return await handleMeetupAction(body);
     }
 

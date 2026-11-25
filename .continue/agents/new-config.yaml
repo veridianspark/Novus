@@ -1,0 +1,18 @@
+name: Local RTX 4050 Config
+version: 1.0.0
+schema: v1
+
+models:
+  - name: Qwen 3 8B (8K)
+    provider: ollama
+    model: qwen3-8b-8k
+    roles:
+      - chat
+      - edit
+      - apply
+
+  - name: Qwen 2.5 Coder 1.5B (Autocomplete)
+    provider: ollama
+    model: qwen2.5-coder:1.5b
+    roles:
+      - autocomplete
