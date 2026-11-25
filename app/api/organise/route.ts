@@ -1276,7 +1276,10 @@ async function handleMeetupAction(body: any): Promise<NextResponse> {
       if(bestIndex<0)throw new Error("No candidate was reachable by road for everyone");
       const candidate=rawCandidates[bestIndex];const times=points.map((_:any,i:number)=>table.durations[i][bestIndex]);const kms=points.map((_:any,i:number)=>table.distances[i][bestIndex]/1000);
       const routes=[];for(let i=0;i<points.length;i++){const url=`https://router.project-osrm.org/route/v1/driving/${points[i].lon},${points[i].lat};${candidate.lon},${candidate.lat}?overview=full&geometries=geojson`;const rr=await fetch(url,{signal:AbortSignal.timeout(12000)});if(rr.ok){const rd=await rr.json();if(rd.routes?.[0])routes.push({id:points[i].id,coordinates:rd.routes[0].geometry.coordinates});}}
-      let placeLabel:string|undefined;try{placeLabel=await nominatimReverse(candidate.lat,candidate.lon);}catch{}
+      let placeLabel: string | undefined;
+try {
+  placeLabel = (await nominatimReverse(candidate.lat, candidate.lon)) ?? undefined;
+} catch {}
       const mins=times.map((x:number)=>x/60);const result={lat:candidate.lat,lon:candidate.lon,avgKm:kms.reduce((a:number,b:number)=>a+b,0)/kms.length,maxKm:Math.max(...kms),minKm:Math.min(...kms),gapKm:Math.max(...kms)-Math.min(...kms),avgMinutes:mins.reduce((a:number,b:number)=>a+b,0)/mins.length,maxMinutes:Math.max(...mins),minMinutes:Math.min(...mins),gapMinutes:Math.max(...mins)-Math.min(...mins),distances:points.map((p:any,i:number)=>({id:p.id,name:p.name,km:kms[i],minutes:mins[i]})),placeLabel};
       return NextResponse.json({result,routes});
     }catch(e:any){return NextResponse.json({error:e?.message||"Road-based meetup calculation failed."},{status:503});}
