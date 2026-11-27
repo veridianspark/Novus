@@ -978,6 +978,14 @@ Example item (dates are illustrative only):
  *      which fixes "same name, different city" mistakes.
  *   4. If Nominatim finds nothing, Gemini's estimate is used and marked "approximate".
  *   5. If participants end up very far apart, a warning is returned.
+ *
+ * Then, for the meeting point itself ("roadMeetup" action):
+ *   - everything is scored with REAL road travel (OSRM), never straight-line distance;
+ *   - it picks a spot where everyone's road distance is within ~2.5 km of each other,
+ *     preferring the quickest such spot, and snaps it to a real named place
+ *     (cafe, mall, metro station, park) from OpenStreetMap when one keeps it fair;
+ *   - it returns the real driving route and turn-by-turn steps for every person.
+ *   Optional env var OSRM_BASE_URL points to your own OSRM server (tried first).
  */
 
 const USER_AGENT = "Novus-Student-App/1.0 (meetup location finder)";
@@ -1252,37 +1260,680 @@ async function resolveOne(
   return { id: q.id, confidence: "not_found", lat: null, lon: null, interpreted: ai?.interpreted };
 }
 
+/* ---------------- Road-based fair meeting point ----------------
+ *
+ * Everything here uses REAL driving routes (OSRM), never straight-line distance.
+ *
+ *  1. Find the fairest point on the road network:
+ *       - 2 people: sample points along the actual driving route between them
+ *         (the fair point of a two-person trip always lies on that route), then
+ *         refine around the best sample.
+ *       - 3+ people: a shrinking grid search, re-scored by road at every stage.
+ *     "Fair" = everyone's ROAD distance is within about FAIR_GAP_KM of each other.
+ *     Among fair points the quickest overall (smallest longest trip) wins.
+ *  2. Swap the raw road point for a real, named place nearby (cafe, mall, metro
+ *     station, park...) from OpenStreetMap, but only if it keeps things fair.
+ *  3. Fetch the real driving route + turn-by-turn steps for every person.
+ */
+
+type RoadPt = { id: number; name: string; lat: number; lon: number };
+type RoadVenue = { name: string; kind: string; bonus: number };
+type RoadCand = { lat: number; lon: number; venue?: RoadVenue; f?: number };
+type RoadScored = {
+  cand: RoadCand;
+  km: number[];
+  minutes: number[];
+  maxKm: number;
+  minKm: number;
+  avgKm: number;
+  gapKm: number;
+  maxMin: number;
+  minMin: number;
+  avgMin: number;
+  gapMin: number;
+  feasible: boolean;
+  score: number;
+};
+
+/** Everyone's road distance may differ by about this much and still count as "equal". */
+const FAIR_GAP_KM = 2.5;
+/** A candidate this far from any drivable road is ignored (lake, forest, airfield...). */
+const SNAP_LIMIT_M = 1500;
+const VENUE_SNAP_LIMIT_M = 700;
+/** Hard ceiling for the whole road calculation (the route has maxDuration = 60s). */
+const ROAD_BUDGET_MS = 50000;
+
+const OSRM_BASES: string[] = unique(
+  [
+    (process.env.OSRM_BASE_URL || "").trim().replace(/\/+$/, ""),
+    "https://router.project-osrm.org",
+    "https://routing.openstreetmap.de/routed-car",
+  ].filter(Boolean)
+);
+
+const OVERPASS_URLS = [
+  "https://overpass-api.de/api/interpreter",
+  "https://overpass.kumi.systems/api/interpreter",
+];
+
+const KM_PER_DEG_LAT = 110.574;
+const kmPerDegLon = (lat: number) => 111.32 * Math.cos((lat * Math.PI) / 180);
+
+const lonLat = (p: { lat: number; lon: number }) => `${p.lon.toFixed(6)},${p.lat.toFixed(6)}`;
+
+/** GET against OSRM, trying each server in turn until one answers. */
+async function osrmGet(path: string, deadline: number, perTryMs = 14000): Promise<any> {
+  let lastError: any = null;
+  for (const base of OSRM_BASES) {
+    const left = deadline - Date.now();
+    if (left < 1500) break;
+    try {
+      const res = await fetch(`${base}${path}`, {
+        headers: { "User-Agent": USER_AGENT, Accept: "application/json" },
+        signal: AbortSignal.timeout(Math.min(perTryMs, left)),
+      });
+      if (!res.ok) {
+        lastError = new Error(`Routing service returned ${res.status}`);
+        continue;
+      }
+      const data = await res.json();
+      if (data?.code && data.code !== "Ok") {
+        lastError = new Error(`${data.code}${data.message ? `: ${data.message}` : ""}`);
+        continue;
+      }
+      return data;
+    } catch (error: any) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error("Road routing service unavailable");
+}
+
+async function roadTable(points: RoadPt[], cands: RoadCand[], deadline: number): Promise<any> {
+  const coords = [...points, ...cands].map(lonLat).join(";");
+  const sources = points.map((_, i) => i).join(";");
+  const destinations = cands.map((_, i) => points.length + i).join(";");
+  return osrmGet(
+    `/table/v1/driving/${coords}?sources=${sources}&destinations=${destinations}&annotations=duration,distance`,
+    deadline
+  );
+}
+
+/** Lower rank = better. Venues get a small bonus so a real place beats an empty road. */
+const rankOf = (s: RoadScored) => s.score - (s.cand.venue?.bonus ?? 0);
+
+/**
+ * Turns an OSRM table into scored candidates. Grid/route candidates are moved onto
+ * the road they snapped to; venues keep their own coordinates.
+ */
+function scoreCandidates(points: RoadPt[], cands: RoadCand[], table: any): RoadScored[] {
+  const out: RoadScored[] = [];
+
+  cands.forEach((cand, j) => {
+    const dest = table?.destinations?.[j];
+    const snapM = typeof dest?.distance === "number" ? dest.distance : 0;
+    if (snapM > (cand.venue ? VENUE_SNAP_LIMIT_M : SNAP_LIMIT_M)) return;
+
+    const secs = points.map((_, i) => table?.durations?.[i]?.[j]);
+    if (secs.some((s: any) => typeof s !== "number" || !Number.isFinite(s))) return;
+    const minutes = secs.map((s: number) => s / 60);
+
+    const metres = points.map((_, i) => table?.distances?.[i]?.[j]);
+    const haveKm = metres.every((m: any) => typeof m === "number" && Number.isFinite(m));
+    // If a server omits distances, rank by time only (real distances come from the final routes).
+    const km = haveKm ? metres.map((m: number) => m / 1000) : minutes.map((m: number) => m * 0.5);
+
+    const maxKm = Math.max(...km);
+    const minKm = Math.min(...km);
+    const avgKm = km.reduce((a: number, b: number) => a + b, 0) / km.length;
+    const maxMin = Math.max(...minutes);
+    const minMin = Math.min(...minutes);
+    const avgMin = minutes.reduce((a: number, b: number) => a + b, 0) / minutes.length;
+    const gapKm = maxKm - minKm;
+    const gapMin = maxMin - minMin;
+
+    const tolKm = Math.max(FAIR_GAP_KM, 0.08 * avgKm);
+    const feasible = gapKm <= tolKm;
+    // Shortest longest-trip wins, with a mild preference for equal travel time. Going past the
+    // fair-gap tolerance costs 3 "minutes" per extra km, so a point that is only evenly far away
+    // (but far from everyone) can never beat a genuinely central one.
+    const score = maxMin + 0.3 * gapMin + 3 * Math.max(0, gapKm - tolKm);
+
+    const loc = dest?.location;
+    const moved: RoadCand =
+      !cand.venue && Array.isArray(loc) && Number.isFinite(loc[0]) && Number.isFinite(loc[1])
+        ? { ...cand, lat: loc[1], lon: loc[0] }
+        : cand;
+
+    out.push({
+      cand: moved,
+      km,
+      minutes,
+      maxKm,
+      minKm,
+      avgKm,
+      gapKm,
+      maxMin,
+      minMin,
+      avgMin,
+      gapMin,
+      feasible,
+      score,
+    });
+  });
+
+  return out;
+}
+
+function pickBest(current: RoadScored | null, list: RoadScored[]): RoadScored | null {
+  let best = current;
+  for (const s of list) if (!best || rankOf(s) < rankOf(best)) best = s;
+  return best;
+}
+
+/** 2 people: the fair point lies on their actual driving route, so sample that. */
+async function searchAlongRoute(points: RoadPt[], deadline: number): Promise<RoadScored | null> {
+  const [a, b] = points;
+  const data = await osrmGet(
+    `/route/v1/driving/${lonLat(a)};${lonLat(b)}?overview=full&geometries=geojson`,
+    deadline
+  );
+  const line: [number, number][] = data?.routes?.[0]?.geometry?.coordinates ?? [];
+  if (line.length < 2) return null;
+
+  const cum: number[] = [0];
+  for (let i = 1; i < line.length; i++) {
+    cum.push(cum[i - 1] + haversineKm(line[i - 1][1], line[i - 1][0], line[i][1], line[i][0]));
+  }
+  const total = cum[cum.length - 1];
+
+  const pointAt = (f: number): RoadCand => {
+    const target = f * total;
+    let i = 1;
+    while (i < cum.length - 1 && cum[i] < target) i++;
+    const seg = cum[i] - cum[i - 1];
+    const t = seg > 0 ? Math.min(1, Math.max(0, (target - cum[i - 1]) / seg)) : 0;
+    return {
+      lon: line[i - 1][0] + (line[i][0] - line[i - 1][0]) * t,
+      lat: line[i - 1][1] + (line[i][1] - line[i - 1][1]) * t,
+      f,
+    };
+  };
+
+  const COARSE = 31;
+  const coarse = Array.from({ length: COARSE }, (_, i) => pointAt((i + 1) / (COARSE + 1)));
+  let best = pickBest(null, scoreCandidates(points, coarse, await roadTable(points, coarse, deadline)));
+  if (!best) return null;
+
+  if (deadline - Date.now() > 8000) {
+    const f0 = best.cand.f ?? 0.5;
+    const lo = Math.max(0.01, f0 - 1 / (COARSE + 1));
+    const hi = Math.min(0.99, f0 + 1 / (COARSE + 1));
+    const FINE = 15;
+    const fine = Array.from({ length: FINE }, (_, i) => pointAt(lo + ((hi - lo) * (i + 1)) / (FINE + 1)));
+    try {
+      best = pickBest(best, scoreCandidates(points, fine, await roadTable(points, fine, deadline)));
+    } catch {
+      // the coarse answer is already good
+    }
+  }
+  return best;
+}
+
+/** 3+ people: a shrinking grid, every candidate scored by real road travel. */
+async function searchByGrid(points: RoadPt[], deadline: number): Promise<RoadScored | null> {
+  const lat0 = points.reduce((s, p) => s + p.lat, 0) / points.length;
+  const lon0 = points.reduce((s, p) => s + p.lon, 0) / points.length;
+  const kx = kmPerDegLon(lat0);
+  const ky = KM_PER_DEG_LAT;
+
+  const xs = points.map((p) => (p.lon - lon0) * kx);
+  const ys = points.map((p) => (p.lat - lat0) * ky);
+  let cx = (Math.min(...xs) + Math.max(...xs)) / 2;
+  let cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+  let halfX = Math.max(((Math.max(...xs) - Math.min(...xs)) / 2) * 1.1, 1.5);
+  let halfY = Math.max(((Math.max(...ys) - Math.min(...ys)) / 2) * 1.1, 1.5);
+  let size = 6;
+
+  let best: RoadScored | null = null;
+
+  for (let round = 0; round < 5; round++) {
+    if (round > 0 && deadline - Date.now() < 22000) break;
+
+    const cands: RoadCand[] = [];
+    for (let a = 0; a < size; a++) {
+      for (let b = 0; b < size; b++) {
+        const x = cx - halfX + (2 * halfX * a) / (size - 1);
+        const y = cy - halfY + (2 * halfY * b) / (size - 1);
+        cands.push({ lat: lat0 + y / ky, lon: lon0 + x / kx });
+      }
+    }
+
+    let scored: RoadScored[] = [];
+    try {
+      scored = scoreCandidates(points, cands, await roadTable(points, cands, deadline));
+    } catch (error) {
+      if (!best) throw error; // nothing yet: surface the problem
+      break; // otherwise keep what we have
+    }
+    best = pickBest(best, scored);
+    if (!best) return null;
+
+    const spacing = Math.max((2 * halfX) / (size - 1), (2 * halfY) / (size - 1));
+    if (spacing <= 0.6) break;
+
+    cx = (best.cand.lon - lon0) * kx;
+    cy = (best.cand.lat - lat0) * ky;
+    halfX = halfY = Math.max(1.2 * spacing, 0.5);
+    size = 5;
+  }
+
+  return best;
+}
+
+/* ---------- real places near the fair point ---------- */
+
+function classifyVenue(tags: any): RoadVenue | null {
+  const name = String(tags?.name ?? "").trim();
+  if (!name) return null;
+  if (tags.shop === "mall") return { name, kind: "Mall", bonus: 2 };
+  if (tags.railway === "station" || tags.public_transport === "station") {
+    const metro = tags.station === "subway" || tags.station === "light_rail";
+    return { name, kind: metro ? "Metro station" : "Station", bonus: 2 };
+  }
+  switch (tags.amenity) {
+    case "cafe":
+      return { name, kind: "Cafe", bonus: 1.5 };
+    case "food_court":
+      return { name, kind: "Food court", bonus: 1.5 };
+    case "restaurant":
+      return { name, kind: "Restaurant", bonus: 1 };
+    case "fast_food":
+      return { name, kind: "Fast food", bonus: 0.5 };
+    case "library":
+      return { name, kind: "Library", bonus: 0.5 };
+  }
+  if (tags.leisure === "park") return { name, kind: "Park", bonus: 1 };
+  return null;
+}
+
+function overpassQuery(lat: number, lon: number, radiusM: number): string {
+  const around = `(around:${radiusM},${lat.toFixed(5)},${lon.toFixed(5)})`;
+  return `[out:json][timeout:9];(
+nwr${around}[amenity~"^(cafe|restaurant|food_court|fast_food|library)$"][name];
+nwr${around}[shop=mall][name];
+nwr${around}[leisure=park][name];
+nwr${around}[railway=station][name];
+nwr${around}[public_transport=station][name];
+);out center tags 150;`;
+}
+
+async function overpassFetch(query: string, deadline: number): Promise<any[]> {
+  for (const url of OVERPASS_URLS) {
+    const left = deadline - Date.now();
+    if (left < 3000) break;
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: {
+          "User-Agent": USER_AGENT,
+          "Content-Type": "application/x-www-form-urlencoded",
+          Accept: "application/json",
+        },
+        body: `data=${encodeURIComponent(query)}`,
+        signal: AbortSignal.timeout(Math.min(10000, left)),
+      });
+      if (!res.ok) continue;
+      const data = await res.json();
+      if (Array.isArray(data?.elements)) return data.elements;
+    } catch {
+      // try the next mirror
+    }
+  }
+  return [];
+}
+
+async function findVenues(lat: number, lon: number, deadline: number): Promise<RoadCand[]> {
+  let elements = await overpassFetch(overpassQuery(lat, lon, 1000), deadline);
+  if (elements.length < 6) {
+    // quiet area: widen the search once
+    elements = await overpassFetch(overpassQuery(lat, lon, 3000), deadline);
+  }
+
+  const seen = new Set<string>();
+  const found: Array<{ cand: RoadCand; dist: number }> = [];
+
+  for (const el of elements) {
+    const venue = classifyVenue(el?.tags);
+    if (!venue) continue;
+    const vLat = Number(el.lat ?? el.center?.lat);
+    const vLon = Number(el.lon ?? el.center?.lon);
+    if (!Number.isFinite(vLat) || !Number.isFinite(vLon)) continue;
+
+    const key = `${venue.name.toLowerCase()}|${venue.kind}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    found.push({ cand: { lat: vLat, lon: vLon, venue }, dist: haversineKm(lat, lon, vLat, vLon) });
+  }
+
+  return found
+    .sort((a, b) => a.dist - b.dist)
+    .slice(0, 24)
+    .map((f) => f.cand);
+}
+
+/** Best real place near the fair point, or null if none keeps the trip fair. */
+async function pickVenue(
+  points: RoadPt[],
+  best: RoadScored,
+  deadline: number
+): Promise<RoadScored | null> {
+  if (deadline - Date.now() < 14000) return null;
+  try {
+    const venues = await findVenues(best.cand.lat, best.cand.lon, deadline);
+    if (venues.length === 0) return null;
+    const scored = scoreCandidates(points, venues, await roadTable(points, venues, deadline));
+    const ok = scored
+      .filter(
+        (v) =>
+          (v.feasible || (!best.feasible && v.gapKm <= best.gapKm + 1)) &&
+          v.maxMin <= best.maxMin + 4
+      )
+      .sort((a, b) => rankOf(a) - rankOf(b));
+    return ok[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/* ---------- turn-by-turn wording ---------- */
+
+const COMPASS = ["north", "north-east", "east", "south-east", "south", "south-west", "west", "north-west"];
+
+function compassOf(bearing: number): string {
+  return COMPASS[Math.round((((bearing % 360) + 360) % 360) / 45) % 8];
+}
+
+function ordinalOf(n: number): string {
+  const suffixes = ["th", "st", "nd", "rd"];
+  const v = n % 100;
+  return `${n}${suffixes[(v - 20) % 10] || suffixes[v] || suffixes[0]}`;
+}
+
+function turnPhrase(modifier: string): string {
+  switch (modifier) {
+    case "straight":
+      return "Continue straight";
+    case "slight left":
+      return "Bear left";
+    case "slight right":
+      return "Bear right";
+    case "left":
+      return "Turn left";
+    case "right":
+      return "Turn right";
+    case "sharp left":
+      return "Make a sharp left";
+    case "sharp right":
+      return "Make a sharp right";
+    case "uturn":
+      return "Make a U-turn";
+    default:
+      return "Continue";
+  }
+}
+
+const sideOf = (modifier: string) =>
+  modifier.includes("left") ? "left" : modifier.includes("right") ? "right" : "";
+
+function describeStep(step: any): string {
+  const m = step?.maneuver ?? {};
+  const type = String(m.type ?? "");
+  const mod = String(m.modifier ?? "");
+  const road = String(step?.name ?? "").trim() || String(step?.ref ?? "").trim();
+  const onto = road ? ` onto ${road}` : "";
+  const on = road ? ` on ${road}` : "";
+  const side = sideOf(mod);
+
+  switch (type) {
+    case "depart":
+      return `Head ${compassOf(Number(m.bearing_after) || 0)}${on}`;
+    case "arrive":
+      return side
+        ? `Arrive at the meeting point, on your ${side}`
+        : "Arrive at the meeting point";
+    case "turn":
+      return mod === "uturn" ? `Make a U-turn${on}` : `${turnPhrase(mod)}${onto}`;
+    case "new name":
+      return `Continue${onto || " straight"}`;
+    case "continue":
+      return mod && mod !== "straight" ? `${turnPhrase(mod)}${on}` : `Continue straight${on}`;
+    case "merge":
+      return `Merge${side ? ` ${side}` : ""}${onto}`;
+    case "on ramp":
+      return `Take the ramp${side ? ` on the ${side}` : ""}${onto}`;
+    case "off ramp":
+      return `Take the exit${side ? ` on the ${side}` : ""}${onto}`;
+    case "fork":
+      return `Keep ${side || "straight"} at the fork${onto}`;
+    case "end of road":
+      return `At the end of the road, ${turnPhrase(mod).toLowerCase()}${onto}`;
+    case "roundabout":
+    case "rotary": {
+      const place = type === "rotary" ? "traffic circle" : "roundabout";
+      const exit = Number(m.exit);
+      return Number.isFinite(exit) && exit > 0
+        ? `At the ${place}, take the ${ordinalOf(exit)} exit${onto}`
+        : `Enter the ${place}${onto}`;
+    }
+    case "roundabout turn":
+      return `At the roundabout, ${turnPhrase(mod).toLowerCase()}${onto}`;
+    case "exit roundabout":
+    case "exit rotary":
+      return `Exit the roundabout${onto}`;
+    default:
+      return `Continue${on}`;
+  }
+}
+
+type RoadRoute = {
+  id: number;
+  name: string;
+  km: number;
+  minutes: number;
+  coordinates: [number, number][];
+  steps: Array<{
+    instruction: string;
+    road: string;
+    distanceM: number;
+    durationS: number;
+    type: string;
+    modifier: string;
+    lat: number;
+    lon: number;
+  }>;
+  mapsUrl: string;
+};
+
+async function fetchRoadRoute(
+  p: RoadPt,
+  dest: { lat: number; lon: number },
+  deadline: number
+): Promise<RoadRoute | null> {
+  const data = await osrmGet(
+    `/route/v1/driving/${lonLat(p)};${lonLat(dest)}?overview=full&geometries=geojson&steps=true&alternatives=false`,
+    deadline,
+    15000
+  );
+  const route = data?.routes?.[0];
+  if (!route) return null;
+
+  const rawSteps: any[] = route.legs?.[0]?.steps ?? [];
+  const steps = rawSteps
+    .map((s: any) => ({
+      instruction: describeStep(s),
+      road: String(s?.name ?? ""),
+      distanceM: Math.round(Number(s?.distance) || 0),
+      durationS: Math.round(Number(s?.duration) || 0),
+      type: String(s?.maneuver?.type ?? ""),
+      modifier: String(s?.maneuver?.modifier ?? ""),
+      lat: Number(s?.maneuver?.location?.[1]),
+      lon: Number(s?.maneuver?.location?.[0]),
+    }))
+    .filter((s) => Number.isFinite(s.lat) && Number.isFinite(s.lon));
+
+  const coordinates = ((route.geometry?.coordinates ?? []) as number[][]).map(
+    (c) => [Math.round(c[0] * 1e5) / 1e5, Math.round(c[1] * 1e5) / 1e5] as [number, number]
+  );
+
+  return {
+    id: p.id,
+    name: p.name,
+    km: Number(route.distance) / 1000,
+    minutes: Number(route.duration) / 60,
+    coordinates,
+    steps,
+    mapsUrl: `https://www.google.com/maps/dir/?api=1&origin=${p.lat},${p.lon}&destination=${dest.lat},${dest.lon}&travelmode=driving`,
+  };
+}
+
+/* ---------- the request handler ---------- */
+
+async function handleRoadMeetup(body: any): Promise<NextResponse> {
+  const points: RoadPt[] = Array.isArray(body?.points)
+    ? body.points
+        .slice(0, MAX_PEOPLE)
+        .map((p: any) => ({
+          id: Number(p?.id),
+          name: String(p?.name || `Person ${p?.id}`).slice(0, 60),
+          lat: Number(p?.lat),
+          lon: Number(p?.lon),
+        }))
+        .filter((p: RoadPt) => Number.isFinite(p.id) && validCoords(p.lat, p.lon))
+    : [];
+
+  if (points.length < 2) {
+    return NextResponse.json(
+      { error: "At least two valid participant locations are required." },
+      { status: 400 }
+    );
+  }
+
+  const deadline = Date.now() + ROAD_BUDGET_MS;
+  const notes: string[] = [];
+
+  try {
+    let best: RoadScored | null = null;
+    if (points.length === 2) {
+      try {
+        best = await searchAlongRoute(points, deadline);
+      } catch {
+        best = null;
+      }
+    }
+    if (!best) best = await searchByGrid(points, deadline);
+    if (!best) {
+      throw new Error("NO_ROAD_LINK");
+    }
+
+    const venue = await pickVenue(points, best, deadline);
+    const chosen = venue ?? best;
+
+    // Real driving route + turn-by-turn steps for everyone.
+    const routes: RoadRoute[] = [];
+    const figures: Array<{ id: number; name: string; km: number; minutes: number }> = [];
+    for (let i = 0; i < points.length; i++) {
+      const p = points[i];
+      let route: RoadRoute | null = null;
+      try {
+        route = await fetchRoadRoute(p, chosen.cand, deadline);
+      } catch {
+        route = null;
+      }
+      if (route) {
+        routes.push(route);
+        figures.push({ id: p.id, name: p.name, km: route.km, minutes: route.minutes });
+      } else {
+        notes.push(`Couldn't draw the exact route for ${p.name}, so only its estimated trip is shown.`);
+        figures.push({ id: p.id, name: p.name, km: chosen.km[i], minutes: chosen.minutes[i] });
+      }
+    }
+
+    const kms = figures.map((f) => f.km);
+    const mins = figures.map((f) => f.minutes);
+    const avgKm = kms.reduce((a, b) => a + b, 0) / kms.length;
+    const maxKm = Math.max(...kms);
+    const minKm = Math.min(...kms);
+    const maxMinutes = Math.max(...mins);
+    const minMinutes = Math.min(...mins);
+    const gapKm = maxKm - minKm;
+    const balanced = gapKm <= Math.max(FAIR_GAP_KM, 0.08 * avgKm);
+
+    if (!balanced) {
+      notes.push(
+        "No spot reachable by road is perfectly even for everyone, so this is the most balanced one found."
+      );
+    }
+    if (!venue) {
+      notes.push("No suitable named place was found close to the fair point, so it is marked on the road.");
+    }
+
+    let placeLabel: string | undefined;
+    let placeName: string | undefined;
+    let placeKind: string | undefined;
+    if (chosen.cand.venue) {
+      placeName = chosen.cand.venue.name;
+      placeKind = chosen.cand.venue.kind;
+      placeLabel = `${placeName} (${placeKind})`;
+    } else if (deadline - Date.now() > 4000) {
+      try {
+        const near = await nominatimReverse(chosen.cand.lat, chosen.cand.lon);
+        if (near) placeLabel = near;
+      } catch {
+        // label is optional
+      }
+    }
+
+    return NextResponse.json({
+      result: {
+        lat: chosen.cand.lat,
+        lon: chosen.cand.lon,
+        avgKm,
+        maxKm,
+        minKm,
+        gapKm,
+        avgMinutes: mins.reduce((a, b) => a + b, 0) / mins.length,
+        maxMinutes,
+        minMinutes,
+        gapMinutes: maxMinutes - minMinutes,
+        distances: figures,
+        placeLabel,
+        placeName,
+        placeKind,
+        balanced,
+      },
+      routes,
+      notes,
+    });
+  } catch (error: any) {
+    const message = String(error?.message ?? "");
+    console.error("Road meetup failed:", sanitize(message));
+    let friendly = "Road routing is unavailable right now. Please try again in a moment.";
+    if (message === "NO_ROAD_LINK" || /NoRoute|NoSegment|NoTable/i.test(message)) {
+      friendly =
+        "No drivable road connects all of these places. Check that each location is on the same landmass and try again.";
+    } else if (error?.name === "TimeoutError" || error?.name === "AbortError") {
+      friendly = "The road routing service took too long. Please try again.";
+    }
+    return NextResponse.json({ error: friendly }, { status: 503 });
+  }
+}
+
 /* ---------------- Public handler ---------------- */
 
 async function handleMeetupAction(body: any): Promise<NextResponse> {
   if (body?.action === "roadMeetup") {
-    const points = Array.isArray(body.points) ? body.points.slice(0, MAX_PEOPLE).map((p:any)=>({id:Number(p.id),name:String(p.name||`Person ${p.id}`),lat:Number(p.lat),lon:Number(p.lon)})).filter((p:any)=>validCoords(p.lat,p.lon)) : [];
-    if(points.length<2) return NextResponse.json({error:"At least two valid participant locations are required."},{status:400});
-    try {
-      // Search a grid of nearby network-accessible candidate locations, then rank by
-      // OSRM travel-time fairness. A local grid is intentionally bounded and coarse.
-      const centerLat=points.reduce((s:any,p:any)=>s+p.lat,0)/points.length;
-      const centerLon=points.reduce((s:any,p:any)=>s+p.lon,0)/points.length;
-      const latStep=0.018, lonStep=0.018/Math.max(0.25,Math.cos(centerLat*Math.PI/180));
-      const offsets=[-2,-1,0,1,2];
-      const rawCandidates=offsets.flatMap((a:number)=>offsets.map((b:number)=>({lat:centerLat+a*latStep,lon:centerLon+b*lonStep})));
-      const coordStr=[...points.map((p:any)=>`${p.lon},${p.lat}`),...rawCandidates.map((p:any)=>`${p.lon},${p.lat}`)].join(";");
-      const srcIdx=points.map((_:any,i:number)=>i).join(";"); const dstIdx=rawCandidates.map((_:any,i:number)=>points.length+i).join(";");
-      const tableUrl=`https://router.project-osrm.org/table/v1/driving/${coordStr}?sources=${srcIdx}&destinations=${dstIdx}&annotations=duration,distance`;
-      const tableRes=await fetch(tableUrl,{signal:AbortSignal.timeout(18000)});if(!tableRes.ok)throw new Error("Road routing service unavailable");const table=await tableRes.json();
-      if(!Array.isArray(table.durations))throw new Error("No road travel times returned");
-      let bestIndex=-1,bestCost=Infinity;
-      for(let j=0;j<rawCandidates.length;j++){const times=points.map((_:any,i:number)=>table.durations?.[i]?.[j]);if(times.some((t:any)=>t==null))continue;const mx=Math.max(...times),mn=Math.min(...times),avg=times.reduce((a:number,b:number)=>a+b,0)/times.length;const cost=mx+0.35*(mx-mn)+0.12*avg;if(cost<bestCost){bestCost=cost;bestIndex=j;}}
-      if(bestIndex<0)throw new Error("No candidate was reachable by road for everyone");
-      const candidate=rawCandidates[bestIndex];const times=points.map((_:any,i:number)=>table.durations[i][bestIndex]);const kms=points.map((_:any,i:number)=>table.distances[i][bestIndex]/1000);
-      const routes=[];for(let i=0;i<points.length;i++){const url=`https://router.project-osrm.org/route/v1/driving/${points[i].lon},${points[i].lat};${candidate.lon},${candidate.lat}?overview=full&geometries=geojson`;const rr=await fetch(url,{signal:AbortSignal.timeout(12000)});if(rr.ok){const rd=await rr.json();if(rd.routes?.[0])routes.push({id:points[i].id,coordinates:rd.routes[0].geometry.coordinates});}}
-      let placeLabel: string | undefined;
-try {
-  placeLabel = (await nominatimReverse(candidate.lat, candidate.lon)) ?? undefined;
-} catch {}
-      const mins=times.map((x:number)=>x/60);const result={lat:candidate.lat,lon:candidate.lon,avgKm:kms.reduce((a:number,b:number)=>a+b,0)/kms.length,maxKm:Math.max(...kms),minKm:Math.min(...kms),gapKm:Math.max(...kms)-Math.min(...kms),avgMinutes:mins.reduce((a:number,b:number)=>a+b,0)/mins.length,maxMinutes:Math.max(...mins),minMinutes:Math.min(...mins),gapMinutes:Math.max(...mins)-Math.min(...mins),distances:points.map((p:any,i:number)=>({id:p.id,name:p.name,km:kms[i],minutes:mins[i]})),placeLabel};
-      return NextResponse.json({result,routes});
-    }catch(e:any){return NextResponse.json({error:e?.message||"Road-based meetup calculation failed."},{status:503});}
+    return handleRoadMeetup(body);
   }
   if (body?.action === "reverse") {
     const lat = Number(body.lat);

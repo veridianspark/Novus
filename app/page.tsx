@@ -36,6 +36,28 @@ type PersonPoint = {
   confidence?: Confidence;
 };
 
+type RouteStep = {
+  instruction: string;
+  road: string;
+  distanceM: number;
+  durationS: number;
+  type: string;
+  modifier: string;
+  lat: number;
+  lon: number;
+};
+
+type PersonRoute = {
+  id: number;
+  name: string;
+  km: number;
+  minutes: number;
+  /** Real road geometry as [lon, lat] pairs. */
+  coordinates: [number, number][];
+  steps: RouteStep[];
+  mapsUrl: string;
+};
+
 type MeetupResult = {
   lat: number;
   lon: number;
@@ -43,8 +65,16 @@ type MeetupResult = {
   maxKm: number;
   minKm: number;
   gapKm: number;
-  distances: { id: number; name: string; km: number }[];
+  avgMinutes: number;
+  maxMinutes: number;
+  minMinutes: number;
+  gapMinutes: number;
+  distances: { id: number; name: string; km: number; minutes: number }[];
   placeLabel?: string;
+  placeName?: string;
+  placeKind?: string;
+  /** False when no reachable spot was within the fair-gap tolerance. */
+  balanced?: boolean;
 };
 
 const STORAGE_KEY = "schoolsync-tasks";
@@ -519,103 +549,54 @@ async function resizeImage(
 }
 
 /* ==================================================
-   MEETUP DISTANCE HELPERS
+   MEETUP ROUTE HELPERS
+   (All distances and times come from the server's real road routing.)
 ================================================== */
 
-function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
-  const toRad = (deg: number) => (deg * Math.PI) / 180;
-  const R = 6371;
-  const dLat = toRad(lat2 - lat1);
-  const dLon = toRad(lon2 - lon1);
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
-  return 2 * R * Math.asin(Math.sqrt(a));
+const ROUTE_COLORS = [
+  "#4f46e5",
+  "#db2777",
+  "#0891b2",
+  "#d97706",
+  "#7c3aed",
+  "#059669",
+  "#dc2626",
+  "#0d9488",
+];
+
+function formatMinutes(min: number): string {
+  const m = Math.max(1, Math.round(min));
+  if (m < 60) return `${m} min`;
+  const h = Math.floor(m / 60);
+  const r = m % 60;
+  return r ? `${h} h ${r} min` : `${h} h`;
 }
 
-/**
- * Finds a FAIR meeting point: the place that keeps the farthest trip as short as
- * possible AND keeps everyone's trip close to the same length.
- *
- * (The old version minimised the AVERAGE distance, which drags the point toward
- * whichever people live close together and makes the outlier travel far.)
- *
- *  1. Start from the minimax centre (smallest circle that covers everyone).
- *  2. Refine with a local search on  cost = 2*max - min,  which punishes both a
- *     long worst trip and a big gap between the longest and shortest trip.
- */
-function computeBestMeetingPoint(
-  points: { id: number; name: string; lat: number; lon: number }[]
-): MeetupResult {
-  const distsFrom = (lat: number, lon: number) =>
-    points.map((p) => haversineKm(lat, lon, p.lat, p.lon));
+function formatStepDistance(meters: number): string {
+  if (meters < 1000) return `${Math.max(10, Math.round(meters / 10) * 10)} m`;
+  return `${(meters / 1000).toFixed(meters < 10000 ? 1 : 0)} km`;
+}
 
-  const cost = (lat: number, lon: number) => {
-    const d = distsFrom(lat, lon);
-    const mx = Math.max(...d);
-    const mn = Math.min(...d);
-    return 2 * mx - mn;
-  };
-
-  // Step 1: minimax centre (Badoiu-Clarkson).
-  let lat = points.reduce((s, p) => s + p.lat, 0) / points.length;
-  let lon = points.reduce((s, p) => s + p.lon, 0) / points.length;
-  for (let i = 1; i <= 2000; i++) {
-    let far = points[0];
-    let farDist = -1;
-    for (const p of points) {
-      const d = haversineKm(lat, lon, p.lat, p.lon);
-      if (d > farDist) {
-        farDist = d;
-        far = p;
-      }
-    }
-    lat += (far.lat - lat) / (i + 1);
-    lon += (far.lon - lon) / (i + 1);
+function stepGlyph(step: RouteStep): string {
+  if (step.type === "depart") return "●";
+  if (step.type === "arrive") return "⚑";
+  if (/roundabout|rotary/.test(step.type)) return "⟳";
+  switch (step.modifier) {
+    case "left":
+    case "sharp left":
+      return "↰";
+    case "right":
+    case "sharp right":
+      return "↱";
+    case "slight left":
+      return "↖";
+    case "slight right":
+      return "↗";
+    case "uturn":
+      return "↩";
+    default:
+      return "↑";
   }
-
-  // Step 2: pattern search on the fairness cost.
-  let step = 0.05; // degrees (~5 km)
-  let best = cost(lat, lon);
-  const dirs = [
-    [1, 0], [-1, 0], [0, 1], [0, -1],
-    [1, 1], [1, -1], [-1, 1], [-1, -1],
-  ];
-  for (let iter = 0; iter < 5000 && step > 1e-6; iter++) {
-    let improved = false;
-    for (const [dLat, dLon] of dirs) {
-      const nLat = lat + dLat * step;
-      const nLon = lon + dLon * step;
-      const c = cost(nLat, nLon);
-      if (c < best - 1e-9) {
-        best = c;
-        lat = nLat;
-        lon = nLon;
-        improved = true;
-      }
-    }
-    if (!improved) step /= 2;
-  }
-
-  const distances = points.map((p) => ({
-    id: p.id,
-    name: p.name || `Person ${p.id}`,
-    km: haversineKm(p.lat, p.lon, lat, lon),
-  }));
-
-  const kms = distances.map((d) => d.km);
-  const maxKm = Math.max(...kms);
-  const minKm = Math.min(...kms);
-
-  return {
-    lat,
-    lon,
-    avgKm: kms.reduce((s, k) => s + k, 0) / kms.length,
-    maxKm,
-    minKm,
-    gapKm: maxKm - minKm,
-    distances,
-  };
 }
 
 const NOVUS_FLASHCARDS: { topic: string; question: string; answer: string }[] = [
@@ -3260,15 +3241,38 @@ function MeetupTab() {
     { id: 2, name: "Person 2", query: "", lat: null, lon: null },
   ]);
   const [result, setResult] = useState<MeetupResult | null>(null);
+  const [routes, setRoutes] = useState<PersonRoute[]>([]);
+  const [activeRouteId, setActiveRouteId] = useState<number | null>(null);
+  const [activeStep, setActiveStep] = useState<{ lat: number; lon: number; text: string } | null>(null);
+  const [routeNotes, setRouteNotes] = useState<string[]>([]);
   const [warnings, setWarnings] = useState<string[]>([]);
   const [aiNote, setAiNote] = useState("");
   const [loading, setLoading] = useState(false);
+  const [loadingStage, setLoadingStage] = useState("");
   const [error, setError] = useState("");
   const [mapError, setMapError] = useState("");
 
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapInstanceRef = useRef<any>(null);
+  const routeLinesRef = useRef<Record<number, any>>({});
+  const stepMarkerRef = useRef<any>(null);
+  const activeRouteIdRef = useRef<number | null>(null);
   const nextId = useRef(3);
+
+  activeRouteIdRef.current = activeRouteId;
+
+  const colorFor = (id: number) => {
+    const i = people.findIndex((p) => p.id === id);
+    return ROUTE_COLORS[(i < 0 ? 0 : i) % ROUTE_COLORS.length];
+  };
+
+  function clearResult() {
+    setResult(null);
+    setRoutes([]);
+    setActiveRouteId(null);
+    setActiveStep(null);
+    setRouteNotes([]);
+  }
 
   function addPerson() {
     if (people.length >= 8) return;
@@ -3282,7 +3286,7 @@ function MeetupTab() {
   function removePerson(id: number) {
     if (people.length <= 2) return;
     setPeople((curr) => curr.filter((p) => p.id !== id));
-    setResult(null);
+    clearResult();
   }
 
   function updatePerson(id: number, patch: Partial<PersonPoint>) {
@@ -3300,7 +3304,7 @@ function MeetupTab() {
           : p
       )
     );
-    if (patch.query !== undefined) setResult(null);
+    if (patch.query !== undefined) clearResult();
   }
 
   function useMyLocation(id: number) {
@@ -3332,7 +3336,7 @@ function MeetupTab() {
               : p
           )
         );
-        setResult(null);
+        clearResult();
       },
       () => setError("Couldn't get your location. Check the browser's location permission."),
       { enableHighAccuracy: true, timeout: 10000 }
@@ -3351,6 +3355,7 @@ function MeetupTab() {
     }
 
     setLoading(true);
+    setLoadingStage("Finding locations…");
     try {
       // People who already have coordinates (e.g. "use my location") skip the lookup.
       const needLookup = filled.filter((p) => p.lat === null || p.lon === null);
@@ -3412,40 +3417,63 @@ function MeetupTab() {
         );
       }
 
-      const best = computeBestMeetingPoint(
-        filled.map((p) => {
-          const r = resolved.get(p.id)!;
-          return { id: p.id, name: p.name, lat: r.lat as number, lon: r.lon as number };
-        })
-      );
+      // Fair meeting point by REAL ROADS: the server scores candidates with driving
+      // routes (not straight lines), picks a real place nearby and returns turn-by-turn steps.
+      setLoadingStage("Finding the fairest spot by road…");
+      const roadRes = await fetch("/api/organise", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "roadMeetup",
+          points: filled.map((p) => {
+            const r = resolved.get(p.id)!;
+            return { id: p.id, name: p.name, lat: r.lat as number, lon: r.lon as number };
+          }),
+        }),
+      });
 
+      let roadData: any = null;
       try {
-        const revRes = await fetch("/api/organise", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "reverse", lat: best.lat, lon: best.lon }),
-        });
-        const rev = await revRes.json();
-        if (rev?.label) best.placeLabel = String(rev.label);
+        roadData = await roadRes.json();
       } catch {
-        // label is optional
+        throw new Error("The routing service didn't answer in time. Please try again.");
+      }
+      if (!roadRes.ok || !roadData?.result) {
+        throw new Error(
+          roadData?.error || "Couldn't work out road routes right now. Please try again in a moment."
+        );
       }
 
-      setResult(best);
+      const routeList: PersonRoute[] = Array.isArray(roadData.routes) ? roadData.routes : [];
+      setResult(roadData.result as MeetupResult);
+      setRoutes(routeList);
+      setActiveRouteId(routeList[0]?.id ?? null);
+      setActiveStep(null);
+      setRouteNotes(Array.isArray(roadData.notes) ? roadData.notes : []);
     } catch (err: any) {
-      setResult(null);
+      clearResult();
       setError(err?.message || "Failed to calculate meeting point.");
     } finally {
       setLoading(false);
+      setLoadingStage("");
     }
   }
 
   /* ---------------- Map ---------------- */
 
-  // Only redraw when the actual points change, not on every keystroke.
+  function applyRouteEmphasis(activeId: number | null) {
+    Object.entries(routeLinesRef.current).forEach(([id, line]) => {
+      const active = Number(id) === activeId;
+      line.setStyle({ weight: active ? 7 : 4, opacity: active ? 1 : 0.5 });
+      if (active) line.bringToFront();
+    });
+  }
+
+  // Only redraw when the actual points or routes change, not on every keystroke.
   const pointsKey = JSON.stringify([
     people.map((p) => [p.id, p.name, p.lat, p.lon]),
     result ? [result.lat, result.lon] : null,
+    routes.map((r) => [r.id, r.coordinates.length]),
   ]);
 
   useEffect(() => {
@@ -3468,6 +3496,8 @@ function MeetupTab() {
         mapInstanceRef.current.remove();
         mapInstanceRef.current = null;
       }
+      routeLinesRef.current = {};
+      stepMarkerRef.current = null;
 
       const validPoints = people.filter((p) => p.lat !== null && p.lon !== null) as (PersonPoint & {
         lat: number;
@@ -3485,39 +3515,55 @@ function MeetupTab() {
         maxZoom: 19,
       }).addTo(map);
 
-      const latLngs: [number, number][] = [];
+      const bounds: [number, number][] = [];
 
-      for (const p of validPoints) {
-        latLngs.push([p.lat, p.lon]);
-        L.marker([p.lat, p.lon])
+      // The real road routes. A white casing under each line keeps it readable on any map colour.
+      for (const route of routes) {
+        const latlngs = route.coordinates.map(([lon, lat]) => [lat, lon] as [number, number]);
+        if (latlngs.length < 2) continue;
+        latlngs.forEach((ll) => bounds.push(ll));
+
+        L.polyline(latlngs, { color: "#ffffff", weight: 9, opacity: 0.9, lineCap: "round", lineJoin: "round" }).addTo(map);
+        routeLinesRef.current[route.id] = L.polyline(latlngs, {
+          color: colorFor(route.id),
+          weight: 5,
+          opacity: 0.95,
+          lineCap: "round",
+          lineJoin: "round",
+        }).addTo(map);
+      }
+      applyRouteEmphasis(activeRouteIdRef.current);
+
+      validPoints.forEach((p, idx) => {
+        bounds.push([p.lat, p.lon]);
+        const icon = L.divIcon({
+          className: "",
+          html: `<div style="width:28px;height:28px;border-radius:9999px;background:${colorFor(p.id)};color:#fff;border:3px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;font:700 13px/1 system-ui,sans-serif">${idx + 1}</div>`,
+          iconSize: [28, 28],
+          iconAnchor: [14, 14],
+        });
+        L.marker([p.lat, p.lon], { icon })
           .addTo(map)
           .bindPopup(`<b>${escapeHtml(p.name)}</b><br/>${escapeHtml(p.resolvedName || "")}`);
-
-        if (result) {
-          L.polyline(
-            [
-              [p.lat, p.lon],
-              [result.lat, result.lon],
-            ],
-            { color: "#4f46e5", weight: 2, dashArray: "5, 6" }
-          ).addTo(map);
-        }
-      }
+      });
 
       if (result) {
-        latLngs.push([result.lat, result.lon]);
-        L.circleMarker([result.lat, result.lon], {
-          radius: 10,
-          color: "#059669",
-          fillColor: "#10b981",
-          fillOpacity: 0.9,
-        })
+        bounds.push([result.lat, result.lon]);
+        const icon = L.divIcon({
+          className: "",
+          html: `<div style="width:38px;height:38px;border-radius:9999px;background:#059669;color:#fff;border:3px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;font:700 18px/1 system-ui,sans-serif">★</div>`,
+          iconSize: [38, 38],
+          iconAnchor: [19, 19],
+        });
+        L.marker([result.lat, result.lon], { icon, zIndexOffset: 1000 })
           .addTo(map)
-          .bindPopup(`<b>Best Meeting Point</b><br/>Avg: ${result.avgKm.toFixed(1)} km`);
+          .bindPopup(
+            `<b>${escapeHtml(result.placeName || "Best meeting point")}</b><br/>Average trip: ${result.avgKm.toFixed(1)} km by road`
+          );
       }
 
-      if (latLngs.length > 1) {
-        map.fitBounds(latLngs, { padding: [36, 36] });
+      if (bounds.length > 1) {
+        map.fitBounds(bounds, { padding: [36, 36] });
       }
     }
 
@@ -3529,11 +3575,54 @@ function MeetupTab() {
         mapInstanceRef.current.remove();
         mapInstanceRef.current = null;
       }
+      routeLinesRef.current = {};
+      stepMarkerRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pointsKey]);
 
+  // Switching person: emphasise their route on the map.
+  useEffect(() => {
+    applyRouteEmphasis(activeRouteId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeRouteId]);
+
+  // Clicking a direction: zoom the map to that turn.
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    const L = typeof window !== "undefined" ? (window as any).L : null;
+    if (!map || !L) return;
+
+    if (stepMarkerRef.current) {
+      stepMarkerRef.current.remove();
+      stepMarkerRef.current = null;
+    }
+    if (!activeStep) return;
+
+    stepMarkerRef.current = L.circleMarker([activeStep.lat, activeStep.lon], {
+      radius: 10,
+      color: "#b45309",
+      weight: 3,
+      fillColor: "#fbbf24",
+      fillOpacity: 0.95,
+    })
+      .addTo(map)
+      .bindTooltip(escapeHtml(activeStep.text), { direction: "top" })
+      .openTooltip();
+    map.flyTo([activeStep.lat, activeStep.lon], Math.max(map.getZoom(), 16), { duration: 0.6 });
+  }, [activeStep]);
+
+  function showStep(step: RouteStep) {
+    setActiveStep({ lat: step.lat, lon: step.lon, text: step.instruction });
+    // On phones the map sits above the list: bring it into view.
+    if (typeof window !== "undefined" && window.innerWidth < 1024) {
+      mapContainerRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+  }
+
   /* ---------------- Render ---------------- */
+
+  const activeRoute = routes.find((r) => r.id === activeRouteId) ?? routes[0] ?? null;
 
   function statusChip(p: PersonPoint) {
     if (p.confidence === "exact") {
@@ -3557,7 +3646,8 @@ function MeetupTab() {
         <h2 className="mt-1 text-3xl font-bold">Best meeting point</h2>
         <p className="mt-2 text-slate-500">
           Type places any way you like: a neighbourhood, a landmark, a nickname, even with typos. AI works out where
-          each one is, using everyone&apos;s entries to pick the right city.
+          each one is, then Novus finds a fair spot using real roads, so everyone travels about the same distance,
+          and gives each person turn-by-turn directions.
         </p>
       </div>
 
@@ -3648,7 +3738,7 @@ function MeetupTab() {
             disabled={loading}
             className="mt-5 w-full rounded-xl bg-indigo-600 px-5 py-3 font-semibold text-white transition hover:bg-indigo-700 disabled:opacity-50"
           >
-            {loading ? "✨ Finding locations…" : "✨ Find best meeting point"}
+            {loading ? `✨ ${loadingStage || "Working…"}` : "✨ Find best meeting point"}
           </button>
         </div>
 
@@ -3657,33 +3747,47 @@ function MeetupTab() {
 
           {!result ? (
             <p className="mt-4 text-sm text-slate-500">
-              Enter at least two locations and click the button to see the common average distance and each
-              person&apos;s distance.
+              Enter at least two locations and click the button to find a fair meeting point, with each
+              person&apos;s road distance, travel time and directions.
             </p>
           ) : (
             <div className="mt-4 space-y-4">
               <div className="grid gap-3 sm:grid-cols-2">
                 <div className="rounded-2xl bg-slate-950 p-4 text-white">
-                  <p className="text-xs text-slate-400">Common average distance</p>
+                  <p className="text-xs text-slate-400">Average trip by road</p>
                   <p className="mt-1 text-3xl font-bold">{result.avgKm.toFixed(1)} km</p>
+                  <p className="mt-0.5 text-xs text-slate-400">about {formatMinutes(result.avgMinutes)}</p>
                 </div>
                 <div className="rounded-2xl bg-emerald-50 p-4">
-                  <p className="text-xs font-semibold text-emerald-700">Farthest leg</p>
+                  <p className="text-xs font-semibold text-emerald-700">Longest trip</p>
                   <p className="mt-1 text-3xl font-bold text-emerald-900">{result.maxKm.toFixed(1)} km</p>
+                  <p className="mt-0.5 text-xs text-emerald-700">about {formatMinutes(result.maxMinutes)}</p>
                 </div>
               </div>
 
-              <p className="rounded-xl bg-indigo-50 px-3.5 py-2.5 text-sm text-indigo-800">
-                ⚖️ Fair split: everyone travels between <b>{result.minKm.toFixed(1)} km</b> and{" "}
-                <b>{result.maxKm.toFixed(1)} km</b> (gap {result.gapKm.toFixed(1)} km).
+              <p
+                className={`rounded-xl px-3.5 py-2.5 text-sm ${
+                  result.balanced === false ? "bg-amber-50 text-amber-800" : "bg-indigo-50 text-indigo-800"
+                }`}
+              >
+                ⚖️ {result.balanced === false ? "Closest balance available: " : "Fair split: "}
+                everyone drives between <b>{result.minKm.toFixed(1)} km</b> and <b>{result.maxKm.toFixed(1)} km</b>{" "}
+                (gap {result.gapKm.toFixed(1)} km).
               </p>
 
               <div className="rounded-xl bg-slate-50 p-3.5 text-sm">
-                <p className="font-semibold text-slate-800">Recommended coordinates</p>
-                <p className="mt-0.5 font-mono text-xs text-slate-600">
+                <p className="font-semibold text-slate-800">{result.placeName ? "Suggested place" : "Meeting point"}</p>
+                {result.placeName ? (
+                  <p className="mt-0.5 text-sm font-medium text-slate-900">
+                    {result.placeName}
+                    {result.placeKind && <span className="text-xs font-normal text-slate-500"> · {result.placeKind}</span>}
+                  </p>
+                ) : (
+                  result.placeLabel && <p className="mt-0.5 text-xs text-slate-500">Near: {result.placeLabel}</p>
+                )}
+                <p className="mt-1 font-mono text-xs text-slate-600">
                   {result.lat.toFixed(5)}, {result.lon.toFixed(5)}
                 </p>
-                {result.placeLabel && <p className="mt-1 text-xs text-slate-500">Near: {result.placeLabel}</p>}
                 <a
                   href={`https://www.google.com/maps/search/?api=1&query=${result.lat},${result.lon}`}
                   target="_blank"
@@ -3696,27 +3800,126 @@ function MeetupTab() {
 
               <div className="divide-y rounded-xl border border-slate-100">
                 {result.distances.map((d) => (
-                  <div key={d.id} className="flex items-center justify-between px-4 py-2.5 text-sm">
-                    <span className="font-medium text-slate-700">{d.name}</span>
-                    <span className="font-semibold text-slate-900">{d.km.toFixed(1)} km</span>
+                  <div key={d.id} className="flex items-center justify-between gap-3 px-4 py-2.5 text-sm">
+                    <span className="flex min-w-0 items-center gap-2 font-medium text-slate-700">
+                      <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: colorFor(d.id) }} />
+                      <span className="truncate">{d.name}</span>
+                    </span>
+                    <span className="shrink-0 font-semibold text-slate-900">
+                      {d.km.toFixed(1)} km · {formatMinutes(d.minutes)}
+                    </span>
                   </div>
                 ))}
               </div>
+
+              {routeNotes.length > 0 && (
+                <ul className="list-disc space-y-1 pl-5 text-xs text-slate-500">
+                  {routeNotes.map((n) => (
+                    <li key={n}>{n}</li>
+                  ))}
+                </ul>
+              )}
             </div>
           )}
         </div>
       </div>
 
-      <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-        <h3 className="text-xl font-bold">Map view</h3>
-        <p className="mt-1 text-sm text-slate-500">
-          Shows participant markers, dashed legs, and the calculated meeting point.
-        </p>
-        {mapError && <p className="mt-2 text-sm text-red-600">{mapError}</p>}
-        <div
-          ref={mapContainerRef}
-          className="mt-4 h-96 w-full overflow-hidden rounded-2xl border border-slate-200 bg-slate-100"
-        />
+      <div className="grid gap-6 lg:grid-cols-5">
+        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm lg:col-span-3">
+          <h3 className="text-xl font-bold">Map view</h3>
+          <p className="mt-1 text-sm text-slate-500">
+            Shows each person&apos;s real driving route and the meeting point. Tap a direction to zoom to that turn.
+          </p>
+          {mapError && <p className="mt-2 text-sm text-red-600">{mapError}</p>}
+          <div
+            ref={mapContainerRef}
+            className="mt-4 h-[26rem] w-full overflow-hidden rounded-2xl border border-slate-200 bg-slate-100 lg:h-[34rem]"
+          />
+        </div>
+
+        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm lg:col-span-2">
+          <h3 className="text-xl font-bold">Directions</h3>
+
+          {!activeRoute ? (
+            <p className="mt-2 text-sm text-slate-500">
+              Turn-by-turn road directions for each person appear here once the meeting point is found.
+            </p>
+          ) : (
+            <>
+              <div className="mt-3 flex flex-wrap gap-2" role="tablist" aria-label="Choose whose directions to show">
+                {routes.map((r) => {
+                  const isActive = r.id === activeRoute.id;
+                  return (
+                    <button
+                      key={r.id}
+                      type="button"
+                      role="tab"
+                      aria-selected={isActive}
+                      onClick={() => {
+                        setActiveRouteId(r.id);
+                        setActiveStep(null);
+                      }}
+                      className={`flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-semibold transition ${
+                        isActive
+                          ? "border-transparent text-white"
+                          : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                      }`}
+                      style={isActive ? { backgroundColor: colorFor(r.id) } : undefined}
+                    >
+                      <span
+                        className="h-2.5 w-2.5 rounded-full"
+                        style={{ backgroundColor: isActive ? "#ffffff" : colorFor(r.id) }}
+                      />
+                      {r.name}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="mt-4 flex items-end justify-between gap-3 rounded-xl bg-slate-50 px-4 py-3">
+                <div>
+                  <p className="text-2xl font-bold text-slate-900">{formatMinutes(activeRoute.minutes)}</p>
+                  <p className="text-sm text-slate-500">{activeRoute.km.toFixed(1)} km by road</p>
+                </div>
+                <a
+                  href={activeRoute.mapsUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="rounded-xl bg-indigo-600 px-3.5 py-2 text-sm font-semibold text-white hover:bg-indigo-700"
+                >
+                  Navigate ↗
+                </a>
+              </div>
+
+              <ol className="mt-4 max-h-80 divide-y divide-slate-100 overflow-y-auto rounded-xl border border-slate-100 lg:max-h-[22rem]">
+                {activeRoute.steps.map((step, i) => (
+                  <li key={`${activeRoute.id}-${i}`}>
+                    <button
+                      type="button"
+                      onClick={() => showStep(step)}
+                      className="flex w-full items-start gap-3 px-4 py-3 text-left text-sm hover:bg-slate-50"
+                    >
+                      <span aria-hidden="true" className="mt-0.5 w-6 shrink-0 text-center text-lg leading-none text-indigo-600">
+                        {stepGlyph(step)}
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block font-medium text-slate-800">{step.instruction}</span>
+                        {step.distanceM > 0 && (
+                          <span className="block text-xs text-slate-500">{formatStepDistance(step.distanceM)}</span>
+                        )}
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ol>
+
+              <p className="mt-3 text-xs text-slate-500">
+                Times are estimates without live traffic. Use Navigate for live traffic and voice guidance in
+                Google Maps.
+              </p>
+            </>
+          )}
+        </div>
       </div>
     </section>
   );
