@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
 
 /* ==================================================
    TYPES & CONSTANTS
@@ -716,8 +717,14 @@ export default function Home() {
   const [flashcardFlipped, setFlashcardFlipped] = useState(false);
   const [flashcardTopic, setFlashcardTopic] = useState("All topics");
   const [flashcardOrder, setFlashcardOrder] = useState<number[]>(() => NOVUS_FLASHCARDS.map((_, i) => i));
-  const flashcardTopics = ["All topics", ...Array.from(new Set(NOVUS_FLASHCARDS.map((c) => c.topic)))];
-  const filteredFlashcardIndices = flashcardTopic === "All topics" ? flashcardOrder : flashcardOrder.filter((i) => NOVUS_FLASHCARDS[i].topic === flashcardTopic);
+  // Two decks share one flashcard element: the course (PDF) deck and cards the AI generated.
+  const [aiCards, setAiCards] = useState<FlashCard[]>([]);
+  const [deckMode, setDeckMode] = useState<"pdf" | "ai">("pdf");
+  const aiDeckLoaded = useRef(false);
+  const flashcardCardRef = useRef<HTMLDivElement | null>(null);
+  const activeDeck: FlashCard[] = deckMode === "ai" && aiCards.length > 0 ? aiCards : NOVUS_FLASHCARDS;
+  const flashcardTopics = ["All topics", ...Array.from(new Set(activeDeck.map((c) => c.topic)))];
+  const filteredFlashcardIndices = (flashcardTopic === "All topics" ? flashcardOrder : flashcardOrder.filter((i) => activeDeck[i]?.topic === flashcardTopic)).filter((i) => i < activeDeck.length);
   const currentFlashcardIndex = filteredFlashcardIndices[Math.min(flashcardIndex, Math.max(0, filteredFlashcardIndices.length - 1))];
 
   const [schoolInfo, setSchoolInfo] = useState("");
@@ -734,8 +741,8 @@ export default function Home() {
   const [expenseCategory, setExpenseCategory] = useState("Food");
   const [expenseDate, setExpenseDate] = useState(formatDate(new Date()));
   const [expenseNotice, setExpenseNotice] = useState("");
-  const [spendingAi, setSpendingAi] = useState(""); const [spendingAiLoading, setSpendingAiLoading] = useState(false);
-  const [flashAiTopic, setFlashAiTopic] = useState(""); const [flashAiNotes, setFlashAiNotes] = useState(""); const [flashAiResult, setFlashAiResult] = useState(""); const [flashAiLoading, setFlashAiLoading] = useState(false);
+  const [spendingAi, setSpendingAi] = useState(""); const [spendingAiLoading, setSpendingAiLoading] = useState(false); const [spendingAiError, setSpendingAiError] = useState("");
+  const [flashAiTopic, setFlashAiTopic] = useState(""); const [flashAiNotes, setFlashAiNotes] = useState(""); const [flashAiError, setFlashAiError] = useState(""); const [flashAiNotice, setFlashAiNotice] = useState(""); const [flashAiLoading, setFlashAiLoading] = useState(false);
 
   // Set on the client only, so server and client markup match (no hydration errors).
   const [todayKey, setTodayKey] = useState("");
@@ -761,6 +768,96 @@ export default function Home() {
   useEffect(() => {
     try { localStorage.setItem("novus-dark-mode", String(darkMode)); } catch {}
   }, [darkMode]);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("novus-ai-deck");
+      const saved = raw ? JSON.parse(raw) : [];
+      if (Array.isArray(saved)) {
+        const cards: FlashCard[] = saved
+          .map((c: any) => ({ topic: String(c?.topic || "AI generated"), question: String(c?.question || ""), answer: String(c?.answer || "") }))
+          .filter((c) => c.question && c.answer);
+        if (cards.length) setAiCards(cards);
+      }
+    } catch {}
+    aiDeckLoaded.current = true;
+  }, []);
+
+  useEffect(() => {
+    if (!aiDeckLoaded.current) return;
+    try { localStorage.setItem("novus-ai-deck", JSON.stringify(aiCards)); } catch {}
+  }, [aiCards]);
+
+  /** Switch the flashcard element between the course deck and the AI deck. */
+  function openDeck(mode: "pdf" | "ai", cards: FlashCard[] = aiCards) {
+    const useAi = mode === "ai" && cards.length > 0;
+    const deck = useAi ? cards : NOVUS_FLASHCARDS;
+    setDeckMode(useAi ? "ai" : "pdf");
+    setFlashcardOrder(deck.map((_, i) => i));
+    setFlashcardTopic("All topics");
+    setFlashcardIndex(0);
+    setFlashcardFlipped(false);
+  }
+
+  async function generateFlashcards() {
+    setFlashAiLoading(true);
+    setFlashAiError("");
+    setFlashAiNotice("");
+    try {
+      const res = await fetch("/api/organise", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "flashcards", topic: flashAiTopic, notes: flashAiNotes }),
+      });
+      let data: any = null;
+      try { data = await res.json(); } catch { throw new Error("The server sent back something unreadable. Please try again."); }
+      if (!res.ok) throw new Error(data?.error || "Request failed");
+
+      const fallbackTopic = flashAiTopic.trim().slice(0, 60) || "AI generated";
+      const incoming: FlashCard[] = (Array.isArray(data?.cards) ? data.cards : [])
+        .map((c: any) => ({ topic: String(c?.topic || "").trim() || fallbackTopic, question: String(c?.question || "").trim(), answer: String(c?.answer || "").trim() }))
+        .filter((c: FlashCard) => c.question && c.answer);
+      if (incoming.length === 0) throw new Error("The AI didn't return usable flashcards. Try a clearer topic or add some notes.");
+
+      const seen = new Set(aiCards.map((c) => c.question.toLowerCase()));
+      const fresh = incoming.filter((c) => !seen.has(c.question.toLowerCase()));
+      if (fresh.length === 0) throw new Error("Those cards are already in your AI deck. Try a different topic.");
+
+      const merged = [...aiCards, ...fresh];
+      setAiCards(merged);
+      openDeck("ai", merged);
+      setFlashcardIndex(aiCards.length); // land on the first new card
+      setFlashAiNotice(`Added ${fresh.length} card${fresh.length === 1 ? "" : "s"} to your AI deck. They're ready to study above.`);
+      if (typeof window !== "undefined") {
+        window.requestAnimationFrame(() => flashcardCardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
+      }
+    } catch (e: any) {
+      setFlashAiError(e?.message || "Failed to generate flashcards.");
+    } finally {
+      setFlashAiLoading(false);
+    }
+  }
+
+  async function analyzeSpending(payload: Record<string, unknown>) {
+    setSpendingAiLoading(true);
+    setSpendingAi("");
+    setSpendingAiError("");
+    try {
+      const res = await fetch("/api/organise", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "spending", data: payload }),
+      });
+      let data: any = null;
+      try { data = await res.json(); } catch { throw new Error("The server sent back something unreadable. Please try again."); }
+      if (!res.ok) throw new Error(data?.error || "Request failed");
+      setSpendingAi(data.result || "No analysis returned.");
+    } catch (e: any) {
+      setSpendingAiError(e?.message || "Could not get insights.");
+    } finally {
+      setSpendingAiLoading(false);
+    }
+  }
 
   /* ==================================================
      CLIENT-ONLY CLOCK VALUES
@@ -1282,34 +1379,146 @@ export default function Home() {
         .novus-root button { transition:background-color .18s ease,color .18s ease,border-color .18s ease,box-shadow .18s ease,transform .18s ease; }
         .novus-root button:focus-visible,.novus-root input:focus-visible,.novus-root textarea:focus-visible,.novus-root select:focus-visible { outline:3px solid rgba(99,102,241,.35)!important; outline-offset:2px; }
         .novus-root .bg-indigo-600,.novus-root .bg-indigo-700 { box-shadow:0 4px 12px rgba(79,70,229,.18); }
-        .novus-root.dark-theme { --surface:#151e30; --surface-soft:#202b40; --surface-raised:#192338; --ink:#f3f6fc; --ink-muted:#b5c0d3; --line:#34445f; --accent:#a5b4fc; --accent-soft:#2a3153; background:#0a1020!important; color:var(--ink)!important; }
-        .novus-root.dark-theme .bg-white,.novus-root.dark-theme .bg-white\/95 { background-color:var(--surface)!important; }
-        .novus-root.dark-theme .bg-\[\#f7f8fc\] { background-color:#0a1020!important; }
-        .novus-root.dark-theme .bg-slate-50 { background-color:var(--surface-soft)!important; }
-        .novus-root.dark-theme .bg-slate-100 { background-color:#26334a!important; }
-        .novus-root.dark-theme .bg-indigo-50,.novus-root.dark-theme .bg-violet-50,.novus-root.dark-theme .bg-blue-50 { background-color:#252d4c!important; }
-        .novus-root.dark-theme .bg-emerald-50 { background-color:#153a35!important; }
-        .novus-root.dark-theme .bg-amber-50 { background-color:#44351e!important; }
-        .novus-root.dark-theme .bg-red-50 { background-color:#482832!important; }
-        .novus-root.dark-theme .text-slate-900,.novus-root.dark-theme .text-slate-950 { color:#f3f6fc!important; }
-        .novus-root.dark-theme .text-slate-800 { color:#e5edf8!important; }
-        .novus-root.dark-theme .text-slate-700,.novus-root.dark-theme .text-slate-600 { color:#c5d0e2!important; }
-        .novus-root.dark-theme .text-slate-500,.novus-root.dark-theme .text-slate-400 { color:#a5b3c9!important; }
-        .novus-root.dark-theme .text-indigo-600,.novus-root.dark-theme .text-indigo-700,.novus-root.dark-theme .text-violet-600 { color:#a5b4fc!important; }
-        .novus-root.dark-theme .text-emerald-700,.novus-root.dark-theme .text-emerald-800,.novus-root.dark-theme .text-emerald-900 { color:#a7f3d0!important; }
-        .novus-root.dark-theme .text-amber-700,.novus-root.dark-theme .text-amber-800 { color:#fde68a!important; }
-        .novus-root.dark-theme .text-red-600,.novus-root.dark-theme .text-red-700 { color:#fca5a5!important; }
-        .novus-root.dark-theme .border-slate-100,.novus-root.dark-theme .border-slate-200,.novus-root.dark-theme .border-slate-300,.novus-root.dark-theme .border-indigo-100 { border-color:var(--line)!important; }
-        .novus-root.dark-theme input,.novus-root.dark-theme textarea,.novus-root.dark-theme select { background:#111a2b!important;color:#f3f6fc!important;border-color:#3a4a65!important; }
-        .novus-root.dark-theme input::placeholder,.novus-root.dark-theme textarea::placeholder { color:#8796b0!important; }
-        .novus-root.dark-theme .hover\:bg-slate-100:hover { background:#30415b!important; }
-        .novus-root.dark-theme .hover\:bg-slate-50:hover { background:#26334a!important; }
-        .novus-root.dark-theme .shadow-sm,.novus-root.dark-theme .shadow-md { box-shadow:0 8px 24px rgba(0,0,0,.28)!important; }
-        .novus-root.dark-theme .divide-y > * + * { border-color:var(--line)!important; }
-        .novus-root.dark-theme table th { background:#202b40!important;color:#e5edf8!important; }
-        .novus-root.dark-theme table td { color:#c5d0e2!important; }
-        .novus-root.dark-theme .bg-indigo-600,.novus-root.dark-theme .bg-indigo-700 { background-color:#5965d9!important;color:white!important; }
-        .novus-root.dark-theme .bg-slate-950 { background-color:#070b15!important; }
+        /* ===== Dark theme: layered surfaces, soft borders, tinted accents ===== */
+        .novus-root.dark-theme { color-scheme:dark; --surface:#141a28; --surface-soft:#1a2131; --surface-raised:#1c2438; --surface-hover:#232d44; --track:#2a3550; --ink:#e9edf5; --ink-muted:#aab4c8; --line:rgba(148,163,184,.17); --line-strong:rgba(148,163,184,.30); --accent:#a5b4fc; --accent-soft:rgba(129,140,248,.14); background:radial-gradient(1100px 560px at 12% -8%,rgba(99,102,241,.16),transparent 60%),radial-gradient(900px 520px at 100% 0%,rgba(168,85,247,.11),transparent 55%),#0c1019!important; background-attachment:fixed!important; color:var(--ink)!important; }
+        .novus-root.dark-theme [class~="bg-white"], .novus-root.dark-theme [class~="bg-white/95"], .novus-root.dark-theme [class~="bg-white/90"] { background-color:var(--surface)!important; }
+        .novus-root.dark-theme [class~="focus:bg-white"]:focus { background-color:var(--surface)!important; }
+        .novus-root.dark-theme nav[class~="bg-white/95"], .novus-root.dark-theme nav { background-color:rgba(12,16,25,.78)!important; -webkit-backdrop-filter:blur(14px); backdrop-filter:blur(14px); border-color:var(--line)!important; }
+        .novus-root.dark-theme [class~="bg-slate-50"], .novus-root.dark-theme [class~="bg-slate-50/60"] { background-color:var(--surface-soft)!important; }
+        .novus-root.dark-theme [class~="bg-slate-100"] { background-color:var(--surface-raised)!important; }
+        .novus-root.dark-theme [class~="bg-slate-200"], .novus-root.dark-theme [class~="bg-slate-200/70"] { background-color:var(--track)!important; }
+        .novus-root.dark-theme [class~="bg-slate-900"] { background-color:#1b2438!important; }
+        .novus-root.dark-theme [class~="bg-slate-950"], .novus-root.dark-theme [class~="bg-slate-950/35"] { background-color:#070a12!important; border:1px solid var(--line); }
+        .novus-root.dark-theme [class~="hover:bg-slate-50"]:hover, .novus-root.dark-theme [class~="hover:bg-white"]:hover { background-color:var(--surface-hover)!important; }
+        .novus-root.dark-theme [class~="hover:bg-slate-100"]:hover { background-color:#2a3550!important; }
+        .novus-root.dark-theme [class~="hover:bg-slate-800"]:hover { background-color:#2c3752!important; }
+        .novus-root.dark-theme [class~="bg-indigo-50"], .novus-root.dark-theme [class~="bg-indigo-50/50"], .novus-root.dark-theme [class~="bg-indigo-50/60"] { background-color:rgba(129,140,248,.10)!important; }
+        .novus-root.dark-theme [class~="bg-indigo-100"] { background-color:rgba(129,140,248,.19)!important; }
+        .novus-root.dark-theme [class~="hover:bg-indigo-50"]:hover { background-color:rgba(129,140,248,.15)!important; }
+        .novus-root.dark-theme [class~="hover:bg-indigo-100"]:hover { background-color:rgba(129,140,248,.24)!important; }
+        .novus-root.dark-theme [class~="border-indigo-100"] { border-color:rgba(129,140,248,.22)!important; }
+        .novus-root.dark-theme [class~="border-indigo-200"] { border-color:rgba(129,140,248,.32)!important; }
+        .novus-root.dark-theme [class~="border-indigo-300"] { border-color:rgba(129,140,248,.45)!important; }
+        .novus-root.dark-theme [class~="text-indigo-600"], .novus-root.dark-theme [class~="text-indigo-700"], .novus-root.dark-theme [class~="text-indigo-800"] { color:#aab4ff!important; }
+        .novus-root.dark-theme [class~="bg-violet-50"], .novus-root.dark-theme [class~="bg-violet-50/50"], .novus-root.dark-theme [class~="bg-violet-50/60"] { background-color:rgba(167,139,250,.10)!important; }
+        .novus-root.dark-theme [class~="bg-violet-100"] { background-color:rgba(167,139,250,.19)!important; }
+        .novus-root.dark-theme [class~="hover:bg-violet-50"]:hover { background-color:rgba(167,139,250,.15)!important; }
+        .novus-root.dark-theme [class~="hover:bg-violet-100"]:hover { background-color:rgba(167,139,250,.24)!important; }
+        .novus-root.dark-theme [class~="border-violet-100"] { border-color:rgba(167,139,250,.22)!important; }
+        .novus-root.dark-theme [class~="border-violet-200"] { border-color:rgba(167,139,250,.32)!important; }
+        .novus-root.dark-theme [class~="border-violet-300"] { border-color:rgba(167,139,250,.45)!important; }
+        .novus-root.dark-theme [class~="text-violet-600"], .novus-root.dark-theme [class~="text-violet-700"] { color:#c4b5fd!important; }
+        .novus-root.dark-theme [class~="bg-blue-50"], .novus-root.dark-theme [class~="bg-blue-50/50"], .novus-root.dark-theme [class~="bg-blue-50/60"] { background-color:rgba(96,165,250,.10)!important; }
+        .novus-root.dark-theme [class~="bg-blue-100"] { background-color:rgba(96,165,250,.19)!important; }
+        .novus-root.dark-theme [class~="hover:bg-blue-50"]:hover { background-color:rgba(96,165,250,.15)!important; }
+        .novus-root.dark-theme [class~="hover:bg-blue-100"]:hover { background-color:rgba(96,165,250,.24)!important; }
+        .novus-root.dark-theme [class~="border-blue-100"] { border-color:rgba(96,165,250,.22)!important; }
+        .novus-root.dark-theme [class~="border-blue-200"] { border-color:rgba(96,165,250,.32)!important; }
+        .novus-root.dark-theme [class~="border-blue-300"] { border-color:rgba(96,165,250,.45)!important; }
+        .novus-root.dark-theme [class~="text-blue-700"] { color:#93c5fd!important; }
+        .novus-root.dark-theme [class~="bg-emerald-50"], .novus-root.dark-theme [class~="bg-emerald-50/50"], .novus-root.dark-theme [class~="bg-emerald-50/60"] { background-color:rgba(52,211,153,.10)!important; }
+        .novus-root.dark-theme [class~="bg-emerald-100"] { background-color:rgba(52,211,153,.19)!important; }
+        .novus-root.dark-theme [class~="hover:bg-emerald-50"]:hover { background-color:rgba(52,211,153,.15)!important; }
+        .novus-root.dark-theme [class~="hover:bg-emerald-100"]:hover { background-color:rgba(52,211,153,.24)!important; }
+        .novus-root.dark-theme [class~="border-emerald-100"] { border-color:rgba(52,211,153,.22)!important; }
+        .novus-root.dark-theme [class~="border-emerald-200"] { border-color:rgba(52,211,153,.32)!important; }
+        .novus-root.dark-theme [class~="border-emerald-300"] { border-color:rgba(52,211,153,.45)!important; }
+        .novus-root.dark-theme [class~="text-emerald-600"], .novus-root.dark-theme [class~="text-emerald-700"], .novus-root.dark-theme [class~="text-emerald-800"], .novus-root.dark-theme [class~="text-emerald-900"] { color:#6ee7b7!important; }
+        .novus-root.dark-theme [class~="bg-amber-50"], .novus-root.dark-theme [class~="bg-amber-50/50"], .novus-root.dark-theme [class~="bg-amber-50/60"] { background-color:rgba(251,191,36,.10)!important; }
+        .novus-root.dark-theme [class~="bg-amber-100"] { background-color:rgba(251,191,36,.19)!important; }
+        .novus-root.dark-theme [class~="hover:bg-amber-50"]:hover { background-color:rgba(251,191,36,.15)!important; }
+        .novus-root.dark-theme [class~="hover:bg-amber-100"]:hover { background-color:rgba(251,191,36,.24)!important; }
+        .novus-root.dark-theme [class~="border-amber-100"] { border-color:rgba(251,191,36,.22)!important; }
+        .novus-root.dark-theme [class~="border-amber-200"] { border-color:rgba(251,191,36,.32)!important; }
+        .novus-root.dark-theme [class~="border-amber-300"] { border-color:rgba(251,191,36,.45)!important; }
+        .novus-root.dark-theme [class~="text-amber-600"], .novus-root.dark-theme [class~="text-amber-700"], .novus-root.dark-theme [class~="text-amber-800"] { color:#fcd34d!important; }
+        .novus-root.dark-theme [class~="bg-red-50"], .novus-root.dark-theme [class~="bg-red-50/50"], .novus-root.dark-theme [class~="bg-red-50/60"] { background-color:rgba(248,113,113,.10)!important; }
+        .novus-root.dark-theme [class~="bg-red-100"] { background-color:rgba(248,113,113,.19)!important; }
+        .novus-root.dark-theme [class~="hover:bg-red-50"]:hover { background-color:rgba(248,113,113,.15)!important; }
+        .novus-root.dark-theme [class~="hover:bg-red-100"]:hover { background-color:rgba(248,113,113,.24)!important; }
+        .novus-root.dark-theme [class~="border-red-100"] { border-color:rgba(248,113,113,.22)!important; }
+        .novus-root.dark-theme [class~="border-red-200"] { border-color:rgba(248,113,113,.32)!important; }
+        .novus-root.dark-theme [class~="border-red-300"] { border-color:rgba(248,113,113,.45)!important; }
+        .novus-root.dark-theme [class~="text-red-500"], .novus-root.dark-theme [class~="text-red-600"], .novus-root.dark-theme [class~="text-red-700"] { color:#fca5a5!important; }
+        .novus-root.dark-theme [class~="hover:text-indigo-600"]:hover, .novus-root.dark-theme [class~="hover:text-indigo-700"]:hover { color:#c7d2fe!important; }
+        .novus-root.dark-theme [class~="hover:text-red-500"]:hover, .novus-root.dark-theme [class~="focus:text-red-500"]:focus { color:#fecaca!important; }
+        .novus-root.dark-theme [class~="hover:text-slate-900"]:hover { color:#ffffff!important; }
+        .novus-root.dark-theme [class~="border"], .novus-root.dark-theme [class~="border-t"], .novus-root.dark-theme [class~="border-b"], .novus-root.dark-theme [class~="border-l"], .novus-root.dark-theme [class~="border-r"], .novus-root.dark-theme [class~="border-y"] { border-color:var(--line)!important; }
+        .novus-root.dark-theme [class~="border-slate-100"], .novus-root.dark-theme [class~="border-slate-200"] { border-color:var(--line)!important; }
+        .novus-root.dark-theme [class~="border-slate-300"] { border-color:var(--line-strong)!important; }
+        .novus-root.dark-theme [class~="border-white/10"], .novus-root.dark-theme [class~="border-white/10"] { border-color:rgba(255,255,255,.10)!important; }
+        .novus-root.dark-theme [class~="border-white/15"], .novus-root.dark-theme [class~="border-white/15"] { border-color:rgba(255,255,255,.15)!important; }
+        .novus-root.dark-theme [class~="border-white/20"], .novus-root.dark-theme [class~="border-white/20"] { border-color:rgba(255,255,255,.20)!important; }
+        .novus-root.dark-theme [class~="border-white/25"], .novus-root.dark-theme [class~="hover:border-white/25"] { border-color:rgba(255,255,255,.25)!important; }
+        .novus-root.dark-theme [class~="border-indigo-600"] { border-color:#818cf8!important; }
+        .novus-root.dark-theme [class~="hover:border-indigo-500"]:hover { border-color:#818cf8!important; }
+        .novus-root.dark-theme [class~="focus:border-indigo-400"]:focus, .novus-root.dark-theme [class~="focus:border-emerald-400"]:focus { border-color:#818cf8!important; }
+        .novus-root.dark-theme .divide-y > * + *, .novus-root.dark-theme [class~="divide-slate-100"] > * + * { border-color:var(--line)!important; }
+        .novus-root.dark-theme [class~="ring-slate-200"] { --tw-ring-color:rgba(148,163,184,.22)!important; box-shadow:0 0 0 1px rgba(148,163,184,.22)!important; }
+        .novus-root.dark-theme [class~="focus:ring-indigo-50"]:focus { --tw-ring-color:rgba(129,140,248,.28)!important; }
+        .novus-root.dark-theme [class~="text-slate-900"], .novus-root.dark-theme [class~="text-slate-950"] { color:var(--ink)!important; }
+        .novus-root.dark-theme [class~="text-slate-800"] { color:#dde3ef!important; }
+        .novus-root.dark-theme [class~="text-slate-700"], .novus-root.dark-theme [class~="text-slate-600"] { color:#c0c9db!important; }
+        .novus-root.dark-theme [class~="text-slate-500"], .novus-root.dark-theme [class~="text-slate-400"] { color:#94a0b8!important; }
+        .novus-root.dark-theme [class~="bg-indigo-600"], .novus-root.dark-theme [class~="bg-indigo-700"] { background-image:linear-gradient(180deg,#6b73f2,#5a5fe4)!important; background-color:#5a5fe4!important; color:#fff!important; box-shadow:0 6px 18px -6px rgba(99,102,241,.55), inset 0 1px 0 rgba(255,255,255,.18)!important; }
+        .novus-root.dark-theme [class~="hover:bg-indigo-700"]:hover { background-image:linear-gradient(180deg,#7279f5,#6066ea)!important; }
+        .novus-root.dark-theme [class~="bg-violet-600"], .novus-root.dark-theme [class~="bg-violet-700"] { background-image:linear-gradient(180deg,#8566f2,#7655e6)!important; background-color:#7655e6!important; color:#fff!important; box-shadow:0 6px 18px -6px rgba(139,92,246,.5), inset 0 1px 0 rgba(255,255,255,.18)!important; }
+        .novus-root.dark-theme [class~="hover:bg-violet-700"]:hover { background-image:linear-gradient(180deg,#9275f5,#8362ea)!important; }
+        .novus-root.dark-theme [class~="bg-emerald-600"], .novus-root.dark-theme [class~="bg-emerald-700"] { background-image:linear-gradient(180deg,#13a97c,#0e9569)!important; background-color:#0e9569!important; color:#fff!important; box-shadow:0 6px 18px -6px rgba(16,185,129,.45), inset 0 1px 0 rgba(255,255,255,.16)!important; }
+        .novus-root.dark-theme [class~="hover:bg-emerald-700"]:hover { background-image:linear-gradient(180deg,#19b887,#11a173)!important; }
+        .novus-root.dark-theme [class~="bg-white"][class*="rounded-2xl"], .novus-root.dark-theme [class~="bg-white"][class*="rounded-3xl"], .novus-root.dark-theme [class~="bg-white"][class*="rounded-[2rem]"] { box-shadow:inset 0 1px 0 rgba(255,255,255,.045), 0 14px 34px -18px rgba(0,0,0,.75)!important; border-color:var(--line)!important; }
+        .novus-root.dark-theme .shadow-sm, .novus-root.dark-theme .shadow-md { box-shadow:inset 0 1px 0 rgba(255,255,255,.04), 0 12px 30px -16px rgba(0,0,0,.7)!important; }
+        .novus-root.dark-theme input, .novus-root.dark-theme textarea, .novus-root.dark-theme select { background:#0f1522!important; color:var(--ink)!important; border-color:var(--line-strong)!important; }
+        .novus-root.dark-theme input:focus, .novus-root.dark-theme textarea:focus, .novus-root.dark-theme select:focus { border-color:#818cf8!important; box-shadow:0 0 0 3px rgba(129,140,248,.22)!important; }
+        .novus-root.dark-theme input::placeholder, .novus-root.dark-theme textarea::placeholder { color:#6f7b94!important; }
+        .novus-root.dark-theme select option { background:#141a28; color:#e9edf5; }
+        .novus-root.dark-theme input[type="checkbox"], .novus-root.dark-theme input[type="radio"], .novus-root.dark-theme input[type="range"] { accent-color:#818cf8; }
+        .novus-root.dark-theme table th { background:var(--surface-soft)!important; color:#dde3ef!important; }
+        .novus-root.dark-theme table td { color:#c0c9db!important; }
+        .novus-root.dark-theme button:disabled { opacity:.45; }
+        .novus-root.dark-theme ::selection { background:rgba(129,140,248,.38); color:#fff; }
+        .novus-root.dark-theme * { scrollbar-color:#2e3a56 transparent; scrollbar-width:thin; }
+        .novus-root.dark-theme ::-webkit-scrollbar { width:10px; height:10px; }
+        .novus-root.dark-theme ::-webkit-scrollbar-thumb { background:#2e3a56; border-radius:9999px; border:2px solid transparent; background-clip:content-box; }
+        .novus-root.dark-theme ::-webkit-scrollbar-track { background:transparent; }
+        .novus-root.dark-theme .novus-card-face { background:linear-gradient(160deg,#182039 0%,#121a2e 100%)!important; border-color:rgba(167,139,250,.28)!important; box-shadow:0 22px 50px -24px rgba(0,0,0,.85), 0 0 0 1px rgba(167,139,250,.06), inset 0 1px 0 rgba(255,255,255,.05)!important; }
+        .novus-root.dark-theme .novus-card-face:hover { border-color:rgba(167,139,250,.5)!important; }
+        .novus-root.dark-theme .novus-prose strong { color:#f3f6fc; }
+        .novus-root.dark-theme .novus-prose pre { background:#070a12!important; border:1px solid var(--line); }
+        .novus-root.dark-theme button[class~="bg-white"][class~="text-slate-950"] { background:linear-gradient(180deg,#f4f6ff,#dfe4ff)!important; color:#10132b!important; border:0!important; box-shadow:0 10px 28px -10px rgba(129,140,248,.7), inset 0 1px 0 #fff!important; }
+        .novus-root.dark-theme button[class~="bg-white"][class~="text-slate-950"]:hover { background:linear-gradient(180deg,#ffffff,#e8ecff)!important; }
+        .novus-root.dark-theme [style*="conic-gradient(#e2e8f0"] { background:conic-gradient(#2a3550 0% 100%)!important; }
+        .novus-root.dark-theme svg [fill="#dbeafe"] { fill:#1e3a5f!important; }
+        .novus-root.dark-theme svg [fill="#e0e7ff"] { fill:#2a3166!important; }
+        .novus-root.dark-theme svg [fill="#ede9fe"] { fill:#3a2b66!important; }
+        .novus-root.dark-theme svg [fill="#cbd5e1"] { fill:#334158!important; }
+        .novus-root.dark-theme svg [fill="#e8e1d6"] { fill:#2c3447!important; }
+        .novus-root.dark-theme svg [fill="#5b3a24"] { fill:#8a6a52!important; }
+        .novus-root.dark-theme svg [fill="#1d4ed8"] { fill:#93c5fd!important; }
+        .novus-root.dark-theme svg [fill="#4338ca"] { fill:#c7d2fe!important; }
+        .novus-root.dark-theme svg [fill="#475569"] { fill:#b4bfd3!important; }
+        .novus-root.dark-theme svg [fill="#64748b"] { fill:#9aa7bf!important; }
+        .novus-root.dark-theme svg [fill="#6d28d9"] { fill:#d8c9ff!important; }
+        .novus-root.dark-theme svg [fill="#15803d"] { fill:#86efac!important; }
+        .novus-root.dark-theme svg [fill="#b91c1c"] { fill:#fca5a5!important; }
+        .novus-root.dark-theme svg [stroke="#e2e8f0"] { stroke:#334158!important; }
+        .novus-root.dark-theme svg [stroke="#d9d0c3"] { stroke:#3b465c!important; }
+        .novus-root.dark-theme svg [stroke="#94a3b8"] { stroke:#6f7e99!important; }
+        .novus-root.dark-theme svg [stroke="#64748b"] { stroke:#8a98b3!important; }
+        .novus-root.dark-theme .leaflet-tile-pane { filter:invert(1) hue-rotate(180deg) brightness(.92) contrast(.88) saturate(.75); }
+        .novus-root.dark-theme .leaflet-container { background:#0f1522!important; }
+        .novus-root.dark-theme .leaflet-popup-content-wrapper, .novus-root.dark-theme .leaflet-popup-tip { background:#1b2338!important; color:#e9edf5!important; box-shadow:0 10px 30px rgba(0,0,0,.55)!important; }
+        .novus-root.dark-theme .leaflet-bar a { background:#1b2338!important; color:#e9edf5!important; border-color:var(--line)!important; }
+        .novus-root.dark-theme .leaflet-control-attribution { background:rgba(12,16,25,.7)!important; color:#8c98b3!important; }
+        .novus-root.dark-theme .leaflet-control-attribution a { color:#a5b4fc!important; }
+
+        /* Flashcard flip + AI loading shimmer (both themes) */
+        @keyframes novusFlip { from { opacity:0; transform:perspective(900px) rotateX(55deg) scale(.97); } to { opacity:1; transform:none; } }
+        .novus-flip { animation:novusFlip .34s cubic-bezier(.2,.7,.2,1) both; transform-origin:50% 60%; }
+        @keyframes novusPulse { 0%,100% { opacity:.4; } 50% { opacity:1; } }
+        .novus-shimmer { animation:novusPulse 1.4s ease-in-out infinite; }
+        @media (prefers-reduced-motion: reduce) { .novus-flip, .novus-shimmer { animation:none; } }
+        .novus-root .novus-prose sub, .novus-root .novus-prose sup { font-size:.72em; line-height:0; }
       `}</style>
       {/* NAVIGATION */}
 
@@ -1347,7 +1556,7 @@ export default function Home() {
           </div>
 
           <div className="flex items-center gap-2">
-            <button onClick={() => setDarkMode((v) => !v)} aria-label={darkMode ? "Switch to light mode" : "Switch to dark mode"} title={darkMode ? "Switch to light mode" : "Switch to dark mode"} className="rounded-xl border border-slate-200 px-3 py-2 text-sm transition hover:bg-slate-100">{darkMode ? "☀️ Light" : "🌙 Dark"}</button>
+            <button onClick={() => setDarkMode((v) => !v)} aria-label={darkMode ? "Switch to light mode" : "Switch to dark mode"} title={darkMode ? "Switch to light mode" : "Switch to dark mode"} className="flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-sm font-medium transition hover:bg-slate-100"><span aria-hidden="true">{darkMode ? "☀️" : "🌙"}</span>{darkMode ? "Light" : "Dark"}</button>
             <div className="hidden h-10 w-10 items-center justify-center rounded-full bg-indigo-100 font-semibold text-indigo-700 sm:flex">N</div>
           </div>
         </div>
@@ -2078,7 +2287,7 @@ History presentation due Monday.`}
                     <div className="rounded-2xl border bg-white p-6 shadow-sm"><h3 className="text-xl font-bold">6-month spending trend</h3><p className="mt-1 text-sm text-slate-500">Monthly totals, including the current month</p><div className="mt-5 flex h-44 items-end gap-2">{sixMonthTrend.map((m)=><div key={m.key} className="flex h-full flex-1 flex-col justify-end"><div className="mb-1 text-center text-[10px] text-slate-500">{m.total?`₹${Math.round(m.total/1000*10)/10}k`:"—"}</div><div className="w-full rounded-t-md bg-emerald-500" style={{height:`${m.total?Math.max(4,(m.total/trendMax)*75):2}%`,opacity:m.key===monthKey?1:.65}}/><div className="mt-2 text-center text-xs text-slate-500">{m.label}</div></div>)}</div></div>
                   </div>
                   <div className="mt-5 rounded-2xl border bg-amber-50/60 p-6"><h3 className="text-xl font-bold">Smart saving suggestions</h3><p className="mt-1 text-sm text-slate-600">Simple ideas based on your actual spending.</p><ul className="mt-4 space-y-3">{savingTips.map((tip,i)=><li key={i} className="flex gap-3 text-sm leading-relaxed"><span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-amber-100 font-semibold text-amber-700">{i+1}</span><span>{tip}</span></li>)}</ul></div>
-                  <div className="mt-5 rounded-2xl border border-emerald-200 bg-emerald-50/50 p-6"><div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-xl font-bold">AI spending coach</h3><p className="mt-1 text-sm text-slate-600">Insights from this month’s expenses and budget.</p></div><button disabled={spendingAiLoading} onClick={async()=>{setSpendingAiLoading(true);setSpendingAi("");try{const res=await fetch("/api/organise",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"spending",data:{budget:monthlyBudget,month:monthKey,expenses:monthExpenses,spent,remaining,categoryTotals}})});const data=await res.json();if(!res.ok)throw new Error(data.error||"Request failed");setSpendingAi(data.result||"No analysis returned.");}catch(e:any){setSpendingAi(e.message||"Could not get insights.");}finally{setSpendingAiLoading(false);}}} className="rounded-xl bg-emerald-700 px-4 py-3 font-semibold text-white disabled:opacity-50">{spendingAiLoading?"Analyzing…":"Analyze my spending"}</button></div>{spendingAi&&<div className="mt-4 whitespace-pre-wrap rounded-xl bg-white p-4 text-sm leading-relaxed">{spendingAi}</div>}</div>
+                  <div className="mt-5 rounded-2xl border border-emerald-200 bg-emerald-50/50 p-6"><div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-xl font-bold">AI spending coach</h3><p className="mt-1 text-sm text-slate-600">Insights from this month’s expenses and budget.</p></div><button disabled={spendingAiLoading} onClick={()=>analyzeSpending({budget:monthlyBudget,month:monthKey,expenses:monthExpenses,spent,remaining,categoryTotals})} className="rounded-xl bg-emerald-700 px-4 py-3 font-semibold text-white disabled:opacity-50">{spendingAiLoading?"Analyzing…":spendingAi?"Analyze again":"Analyze my spending"}</button></div>{spendingAiLoading&&<AiSkeleton lines={5}/>}{spendingAiError&&!spendingAiLoading&&<div role="alert" className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{spendingAiError}</div>}{spendingAi&&!spendingAiLoading&&<div className="mt-4 rounded-xl border border-emerald-200 bg-white p-5 shadow-sm"><RichText text={spendingAi}/></div>}</div>
                   <div className="mt-5 rounded-2xl border bg-white p-6 shadow-sm">
                     <div className="flex items-center justify-between"><h3 className="text-xl font-bold">Transaction history</h3><span className="text-sm text-slate-500">{expenses.length} total</span></div>
                     {expenses.length === 0 ? <p className="mt-4 text-sm text-slate-500">No expenses recorded yet. Add your first transaction above.</p> : <div className="mt-4 divide-y">{expenses.slice().sort((a,b)=>b.date.localeCompare(a.date)).map((expense) => <div key={expense.id} className="flex items-center justify-between gap-3 py-3"><div className="min-w-0"><p className="truncate font-semibold">{expense.title}</p><p className="text-xs text-slate-500">{expense.category} · {expense.date}</p></div><div className="flex items-center gap-3"><span className="font-semibold">−₹{expense.amount.toLocaleString("en-IN", {maximumFractionDigits:2})}</span><button onClick={()=>setExpenses((current)=>current.filter((e)=>e.id!==expense.id))} aria-label={`Delete ${expense.title}`} className="rounded-lg px-2 py-1 text-slate-400 hover:bg-red-50 hover:text-red-500">✕</button></div></div>)}</div>}
@@ -2096,23 +2305,27 @@ History presentation due Monday.`}
           <section className="mx-auto max-w-5xl">
             <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
               <div><p className="text-xs font-bold uppercase tracking-widest text-violet-600">Active recall · AI Modules 1 & 2</p><h2 className="mt-2 text-4xl font-bold tracking-tight">Flashcards</h2><p className="mt-2 text-slate-500">Study the concepts, flip to reveal, and move at your own pace.</p></div>
-              <div className="rounded-2xl bg-violet-50 px-4 py-3 text-sm font-medium text-violet-700">{filteredFlashcardIndices.length} cards · PDF-based</div>
+              <div className="rounded-2xl bg-violet-50 px-4 py-3 text-sm font-medium text-violet-700">{filteredFlashcardIndices.length} cards · {deckMode==="ai"&&aiCards.length>0?"AI generated":"PDF-based"}</div>
+            </div>
+            <div className="mb-5 inline-flex rounded-xl border border-slate-200 bg-slate-50 p-1" role="tablist" aria-label="Choose a flashcard deck">
+              <button role="tab" aria-selected={deckMode==="pdf"||aiCards.length===0} onClick={()=>openDeck("pdf")} className={`rounded-lg px-4 py-2 text-sm font-semibold transition ${deckMode==="pdf"||aiCards.length===0?"bg-white text-violet-700 shadow-sm":"text-slate-500 hover:text-slate-900"}`}>Course deck · {NOVUS_FLASHCARDS.length}</button>
+              <button role="tab" aria-selected={deckMode==="ai"&&aiCards.length>0} disabled={aiCards.length===0} onClick={()=>openDeck("ai")} className={`rounded-lg px-4 py-2 text-sm font-semibold transition disabled:cursor-not-allowed ${deckMode==="ai"&&aiCards.length>0?"bg-white text-violet-700 shadow-sm":"text-slate-500 hover:text-slate-900"}`}>✨ My AI deck · {aiCards.length}</button>
             </div>
             <div className="mb-5 flex flex-wrap items-center gap-3">
               <select value={flashcardTopic} onChange={(e) => {setFlashcardTopic(e.target.value);setFlashcardIndex(0);setFlashcardFlipped(false);}} className="rounded-xl border bg-white px-4 py-3 text-sm">{flashcardTopics.map((topic) => <option key={topic}>{topic}</option>)}</select>
-              <button onClick={() => {setFlashcardOrder(NOVUS_FLASHCARDS.map((_,i)=>i).sort(()=>Math.random()-0.5));setFlashcardIndex(0);setFlashcardFlipped(false);}} className="rounded-xl border bg-white px-4 py-3 text-sm font-semibold hover:bg-slate-50">↻ Shuffle cards</button>
-              <button onClick={() => {setFlashcardOrder(NOVUS_FLASHCARDS.map((_,i)=>i));setFlashcardTopic("All topics");setFlashcardIndex(0);setFlashcardFlipped(false);}} className="rounded-xl border bg-white px-4 py-3 text-sm font-semibold hover:bg-slate-50">Reset deck</button>
+              <button onClick={() => {setFlashcardOrder(activeDeck.map((_,i)=>i).sort(()=>Math.random()-0.5));setFlashcardIndex(0);setFlashcardFlipped(false);}} className="rounded-xl border bg-white px-4 py-3 text-sm font-semibold hover:bg-slate-50">↻ Shuffle cards</button>
+              <button onClick={() => {setFlashcardOrder(activeDeck.map((_,i)=>i));setFlashcardTopic("All topics");setFlashcardIndex(0);setFlashcardFlipped(false);}} className="rounded-xl border bg-white px-4 py-3 text-sm font-semibold hover:bg-slate-50">Reset deck</button>
             </div>
-            {filteredFlashcardIndices.length > 0 && currentFlashcardIndex !== undefined ? (<div>
-              <div className="mb-3 flex items-center justify-between text-sm text-slate-500"><span>{flashcardIndex+1} / {filteredFlashcardIndices.length}</span><span>{NOVUS_FLASHCARDS[currentFlashcardIndex].topic}</span></div>
-              <button onClick={() => setFlashcardFlipped((v)=>!v)} className="group min-h-[340px] w-full rounded-3xl border border-violet-100 bg-white p-8 text-left shadow-sm transition hover:shadow-lg sm:p-12">
-                <div className="mb-8 flex items-center justify-between"><span className="rounded-full bg-violet-100 px-3 py-1 text-xs font-bold uppercase tracking-wide text-violet-700">{flashcardFlipped ? "Answer" : "Question"}</span><span className="text-sm text-slate-400">Click to flip ↻</span></div>
-                <div className="flex min-h-[190px] items-center justify-center"><p className="max-w-3xl text-center text-2xl font-semibold leading-relaxed sm:text-3xl">{flashcardFlipped ? NOVUS_FLASHCARDS[currentFlashcardIndex].answer : NOVUS_FLASHCARDS[currentFlashcardIndex].question}</p></div><p className="mt-6 text-center text-sm text-slate-400">{flashcardFlipped ? "Click to return to the question" : "Try answering before you reveal it"}</p>
+            <div ref={flashcardCardRef} className="scroll-mt-28">{filteredFlashcardIndices.length > 0 && currentFlashcardIndex !== undefined ? (<div>
+              <div className="mb-3 flex items-center justify-between text-sm text-slate-500"><span>{flashcardIndex+1} / {filteredFlashcardIndices.length}</span><span>{activeDeck[currentFlashcardIndex].topic}</span></div>
+              <button onClick={() => setFlashcardFlipped((v)=>!v)} className="novus-card-face group min-h-[340px] w-full rounded-3xl border border-violet-100 bg-white p-8 text-left shadow-sm transition hover:shadow-lg sm:p-12">
+                <div className="mb-8 flex items-center justify-between"><span className="flex items-center gap-2"><span className="rounded-full bg-violet-100 px-3 py-1 text-xs font-bold uppercase tracking-wide text-violet-700">{flashcardFlipped ? "Answer" : "Question"}</span>{deckMode==="ai"&&aiCards.length>0&&<span className="rounded-full bg-indigo-50 px-2.5 py-1 text-[11px] font-bold text-indigo-700">✨ AI</span>}</span><span className="text-sm text-slate-400">Click to flip ↻</span></div>
+                <div key={`${deckMode}-${currentFlashcardIndex}-${flashcardFlipped}`} className="novus-flip flex min-h-[190px] items-center justify-center"><RichText align="center" size="card" className="max-w-3xl" text={flashcardFlipped ? activeDeck[currentFlashcardIndex].answer : activeDeck[currentFlashcardIndex].question}/></div><p className="mt-6 text-center text-sm text-slate-400">{flashcardFlipped ? "Click to return to the question" : "Try answering before you reveal it"}</p>
               </button>
               <div className="mt-5 h-2 overflow-hidden rounded-full bg-slate-200"><div className="h-full rounded-full bg-violet-500 transition-all" style={{width:`${((flashcardIndex+1)/filteredFlashcardIndices.length)*100}%`}} /></div>
               <div className="mt-5 flex items-center justify-between gap-3"><button disabled={flashcardIndex===0} onClick={()=>{setFlashcardIndex((i)=>Math.max(0,i-1));setFlashcardFlipped(false);}} className="rounded-xl border bg-white px-5 py-3 font-semibold disabled:opacity-40">← Previous</button><button onClick={()=>setFlashcardFlipped((v)=>!v)} className="rounded-xl bg-violet-600 px-5 py-3 font-semibold text-white hover:bg-violet-700">{flashcardFlipped?"Hide answer":"Reveal answer"}</button><button disabled={flashcardIndex>=filteredFlashcardIndices.length-1} onClick={()=>{setFlashcardIndex((i)=>Math.min(filteredFlashcardIndices.length-1,i+1));setFlashcardFlipped(false);}} className="rounded-xl border bg-white px-5 py-3 font-semibold disabled:opacity-40">Next →</button></div>
-            </div>) : <div className="rounded-2xl border bg-white p-8 text-center text-slate-500">No cards in this topic.</div>}
-            <div className="mt-8 rounded-3xl border border-violet-200 bg-violet-50/50 p-6"><h3 className="text-xl font-bold">AI flashcard generator</h3><p className="mt-1 text-sm text-slate-600">Create cards from a topic or your notes.</p><input value={flashAiTopic} onChange={e=>setFlashAiTopic(e.target.value)} placeholder="Topic (e.g. PN junction diode)" className="mt-4 w-full rounded-xl border p-3"/><textarea value={flashAiNotes} onChange={e=>setFlashAiNotes(e.target.value)} placeholder="Optional notes…" rows={4} className="mt-3 w-full rounded-xl border p-3"/><button disabled={flashAiLoading||(!flashAiTopic.trim()&&!flashAiNotes.trim())} onClick={async()=>{setFlashAiLoading(true);setFlashAiResult("");try{const res=await fetch("/api/organise",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"flashcards",topic:flashAiTopic,notes:flashAiNotes})});const data=await res.json();if(!res.ok)throw new Error(data.error||"Request failed");let raw=data.result||"";try{const cards=JSON.parse(raw.replace(/^```(?:json)?\s*/i,"").replace(/\s*```$/,""));setFlashAiResult(cards.map((c:any,i:number)=>`CARD ${i+1}\nQ: ${c.question}\nA: ${c.answer}`).join("\n\n"));}catch{setFlashAiResult(raw);}}catch(e:any){setFlashAiResult(e.message||"Failed to generate.");}finally{setFlashAiLoading(false);}}} className="mt-3 rounded-xl bg-violet-700 px-5 py-3 font-semibold text-white disabled:opacity-50">{flashAiLoading?"Creating…":"Generate flashcards"}</button>{flashAiResult&&<div className="mt-4 whitespace-pre-wrap rounded-xl bg-white p-4 text-sm leading-relaxed">{flashAiResult}</div>}</div>
+            </div>) : <div className="rounded-2xl border bg-white p-8 text-center text-slate-500">No cards in this topic.</div>}</div>
+            <div className="mt-8 rounded-3xl border border-violet-200 bg-violet-50/50 p-6"><div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="text-xl font-bold">AI flashcard generator</h3><p className="mt-1 text-sm text-slate-600">Create cards from a topic or your notes. They appear in the flashcard deck above, ready to flip.</p></div>{aiCards.length>0&&<button onClick={()=>{if(window.confirm("Remove all "+aiCards.length+" AI-generated cards?")){setAiCards([]);openDeck("pdf",[]);setFlashAiNotice("");}}} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50">Clear AI deck ({aiCards.length})</button>}</div><input value={flashAiTopic} onChange={e=>setFlashAiTopic(e.target.value)} placeholder="Topic (e.g. PN junction diode)" className="mt-4 w-full rounded-xl border p-3"/><textarea value={flashAiNotes} onChange={e=>setFlashAiNotes(e.target.value)} placeholder="Optional notes…" rows={4} className="mt-3 w-full rounded-xl border p-3"/><button disabled={flashAiLoading||(!flashAiTopic.trim()&&!flashAiNotes.trim())} onClick={generateFlashcards} className="mt-3 rounded-xl bg-violet-700 px-5 py-3 font-semibold text-white disabled:opacity-50">{flashAiLoading?"Creating cards…":"✨ Generate flashcards"}</button>{flashAiLoading&&<AiSkeleton lines={3}/>}{flashAiError&&!flashAiLoading&&<div role="alert" className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{flashAiError}</div>}{flashAiNotice&&!flashAiLoading&&<div role="status" className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800"><span>{flashAiNotice}</span><button onClick={()=>flashcardCardRef.current?.scrollIntoView({behavior:"smooth",block:"start"})} className="font-semibold underline">Study now ↑</button></div>}</div>
             <div className="mt-8 rounded-2xl border bg-white p-5"><h3 className="font-bold">How to use this deck</h3><p className="mt-2 text-sm leading-6 text-slate-500">Read the question, answer from memory, then reveal the card. Filter by topic to focus on a module or concept. These cards are built from the two uploaded AI PDFs.</p></div>
           </section>
         )}
@@ -3925,6 +4138,312 @@ function MeetupTab() {
   );
 }
 
+/* ==================================================
+   AI TEXT RENDERING
+   AI models answer in Markdown (**bold**, bullets, headings, tables, $math$).
+   This turns that into clean, themed UI instead of showing raw symbols.
+================================================== */
+
+type FlashCard = { topic: string; question: string; answer: string };
+
+const LATEX_SYMBOLS: Record<string, string> = {
+  "\\times": "×", "\\cdot": "·", "\\div": "÷", "\\pm": "±", "\\mp": "∓", "\\approx": "≈", "\\neq": "≠",
+  "\\leq": "≤", "\\le": "≤", "\\geq": "≥", "\\ge": "≥", "\\rightarrow": "→", "\\to": "→", "\\leftarrow": "←",
+  "\\Rightarrow": "⇒", "\\Leftrightarrow": "⇔", "\\infty": "∞", "\\Omega": "Ω", "\\omega": "ω", "\\mu": "µ",
+  "\\pi": "π", "\\theta": "θ", "\\alpha": "α", "\\beta": "β", "\\gamma": "γ", "\\delta": "δ", "\\Delta": "Δ",
+  "\\lambda": "λ", "\\sigma": "σ", "\\tau": "τ", "\\phi": "φ", "\\circ": "°", "\\sum": "Σ", "\\int": "∫",
+  "\\ldots": "…", "\\dots": "…", "\\quad": " ", "\\,": " ", "\\;": " ", "\\ ": " ", "\\%": "%", "\\$": "$", "\\_": "_",
+};
+
+const wrapIfComplex = (t: string) => (/^[\w.]+$/.test(t.trim()) ? t.trim() : `(${t.trim()})`);
+
+function latexToPlain(src: string): string {
+  let s = src.trim();
+  s = s.replace(/\\(?:text|mathrm|mathbf|mathit|textbf|textit|operatorname|mathsf)\s*\{([^{}]*)\}/g, "$1");
+  s = s.replace(/\\(?:left|right|bigg|Bigg|big|Big)(?![a-zA-Z])/g, "");
+  for (let i = 0; i < 3; i++) {
+    s = s.replace(/\\d?frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}/g, (_m, a, b) => `${wrapIfComplex(a)}/${wrapIfComplex(b)}`);
+    s = s.replace(/\\sqrt\s*\{([^{}]*)\}/g, "√($1)");
+  }
+  s = s.replace(/\\[a-zA-Z]+|\\[,; %$_]/g, (m) => LATEX_SYMBOLS[m] ?? m.replace(/^\\/, ""));
+  // LaTeX swallows the space after a command: "\\Delta V" is "ΔV", "5 \\mu F" is "5 µF".
+  return s.replace(/([Δαβγδλσφτθµπω]) (?=[A-Za-z])/g, "$1");
+}
+
+/** Equation text with real subscripts/superscripts, e.g. V_{out} → V<sub>out</sub>. */
+function renderMath(src: string, key: string): ReactNode {
+  const plain = latexToPlain(src);
+  const parts: ReactNode[] = [];
+  const re = /_(\{[^{}]*\}|[A-Za-z0-9]+)|\^(\{[^{}]*\}|-?[A-Za-z0-9]+)/g;
+  const clean = (t: string) => t.replace(/[{}]/g, "");
+  let last = 0;
+  let n = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(plain)) !== null) {
+    if (m.index > last) parts.push(clean(plain.slice(last, m.index)));
+    if (m[1] !== undefined) parts.push(<sub key={`${key}-s${n++}`}>{clean(m[1])}</sub>);
+    else parts.push(<sup key={`${key}-p${n++}`}>{clean(m[2])}</sup>);
+    last = m.index + m[0].length;
+  }
+  if (last < plain.length) parts.push(clean(plain.slice(last)));
+  return (
+    <span key={key} className="whitespace-nowrap rounded-md bg-slate-100 px-1.5 py-0.5 font-serif text-[1.05em] text-slate-900">
+      {parts}
+    </span>
+  );
+}
+
+const looksLikeMath = (inner: string) =>
+  /^\S(.*\S)?$/.test(inner) && /[\\^_=]|[A-Za-z]/.test(inner) && !(/^\d/.test(inner) && /\s/.test(inner));
+
+function renderInline(text: string, keyPrefix = "i"): ReactNode[] {
+  const out: ReactNode[] = [];
+  const re = /`([^`\n]+)`|\*\*([^\n]+?)\*\*|__([^\n]+?)__|\\\(([^\n]+?)\\\)|\$([^$\n]+?)\$|\*([^\s*][^*\n]*?)\*/g;
+  let last = 0;
+  let n = 0;
+  let m: RegExpExecArray | null;
+
+  while ((m = re.exec(text)) !== null) {
+    const idx = m.index;
+    const key = `${keyPrefix}-${n++}`;
+    let node: ReactNode | null = null;
+
+    if (m[1] !== undefined) {
+      node = (
+        <code key={key} className="rounded-md bg-slate-100 px-1.5 py-0.5 font-mono text-[0.85em] text-slate-800">
+          {m[1]}
+        </code>
+      );
+    } else if (m[2] !== undefined || m[3] !== undefined) {
+      node = (
+        <strong key={key} className="font-semibold text-slate-900">
+          {renderInline(m[2] ?? m[3], key)}
+        </strong>
+      );
+    } else if (m[4] !== undefined) {
+      node = renderMath(m[4], key);
+    } else if (m[5] !== undefined) {
+      if (looksLikeMath(m[5])) {
+        node = renderMath(m[5], key);
+      } else {
+        // A currency sign, not maths: keep the "$" and look again right after it.
+        out.push(text.slice(last, idx + 1));
+        last = idx + 1;
+        re.lastIndex = idx + 1;
+        continue;
+      }
+    } else if (m[6] !== undefined) {
+      const prev = idx > 0 ? text[idx - 1] : " ";
+      if (/\w/.test(prev)) {
+        re.lastIndex = idx + 1; // e.g. 2*3*4: not emphasis
+        continue;
+      }
+      node = <em key={key}>{renderInline(m[6], key)}</em>;
+    }
+
+    if (node) {
+      if (idx > last) out.push(text.slice(last, idx));
+      out.push(node);
+      last = idx + m[0].length;
+    }
+  }
+  if (last < text.length) out.push(text.slice(last));
+  // Any ** that never paired up should not show as raw symbols.
+  return out.map((x) => (typeof x === "string" ? x.replace(/\*\*|__/g, "") : x));
+}
+
+type RichBlock =
+  | { t: "h"; level: number; text: string }
+  | { t: "p"; text: string }
+  | { t: "list"; items: { kind: "ul" | "ol"; n: number; depth: number; text: string }[] }
+  | { t: "quote"; text: string }
+  | { t: "code"; text: string }
+  | { t: "hr" }
+  | { t: "table"; head: string[]; rows: string[][] };
+
+function parseRichBlocks(raw: string): RichBlock[] {
+  const text = raw
+    .replace(/\r\n?/g, "\n")
+    .replace(/^```(?:markdown|md|text)?[ \t]*\n([\s\S]*?)\n```\s*$/i, "$1")
+    .trim();
+  const lines = text.split("\n");
+  const blocks: RichBlock[] = [];
+  let para: string[] = [];
+  let i = 0;
+
+  const flush = () => {
+    if (para.length) blocks.push({ t: "p", text: para.join(" ") });
+    para = [];
+  };
+  const splitRow = (l: string) => l.trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim());
+  const ulRe = /^(\s*)([-*•+])\s+(.*)$/;
+  const olRe = /^(\s*)(\d+)[.)]\s+(.*)$/;
+
+  while (i < lines.length) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    if (!trimmed) { flush(); i++; continue; }
+
+    if (/^```/.test(trimmed)) {
+      flush();
+      const buf: string[] = [];
+      i++;
+      while (i < lines.length && !/^```/.test(lines[i].trim())) buf.push(lines[i++]);
+      i++;
+      blocks.push({ t: "code", text: buf.join("\n") });
+      continue;
+    }
+
+    const h = /^(#{1,6})\s+(.+?)\s*#*$/.exec(trimmed);
+    if (h) { flush(); blocks.push({ t: "h", level: h[1].length, text: h[2] }); i++; continue; }
+
+    if (/^([-*_])\1{2,}$/.test(trimmed.replace(/\s/g, ""))) { flush(); blocks.push({ t: "hr" }); i++; continue; }
+
+    if (/^\|.*\|$/.test(trimmed) && i + 1 < lines.length && /^\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?$/.test(lines[i + 1].trim())) {
+      flush();
+      const head = splitRow(trimmed);
+      i += 2;
+      const rows: string[][] = [];
+      while (i < lines.length && /^\|.*\|$/.test(lines[i].trim())) rows.push(splitRow(lines[i++]));
+      blocks.push({ t: "table", head, rows });
+      continue;
+    }
+
+    const q = /^>\s?(.*)$/.exec(trimmed);
+    if (q) {
+      flush();
+      const buf = [q[1]];
+      i++;
+      while (i < lines.length && /^>\s?/.test(lines[i].trim())) buf.push(lines[i++].trim().replace(/^>\s?/, ""));
+      blocks.push({ t: "quote", text: buf.join(" ") });
+      continue;
+    }
+
+    if (ulRe.test(line) || olRe.test(line)) {
+      flush();
+      const items: { kind: "ul" | "ol"; n: number; depth: number; text: string }[] = [];
+      while (i < lines.length) {
+        const cur = lines[i];
+        const ul = ulRe.exec(cur);
+        const ol = olRe.exec(cur);
+        if (ul) items.push({ kind: "ul", n: 0, depth: Math.min(2, Math.floor(ul[1].length / 2)), text: ul[3] });
+        else if (ol) items.push({ kind: "ol", n: Number(ol[2]), depth: Math.min(2, Math.floor(ol[1].length / 2)), text: ol[3] });
+        else if (cur.trim() && /^\s{2,}\S/.test(cur) && items.length) items[items.length - 1].text += " " + cur.trim();
+        else break;
+        i++;
+      }
+      blocks.push({ t: "list", items });
+      continue;
+    }
+
+    para.push(trimmed);
+    i++;
+  }
+  flush();
+  return blocks;
+}
+
+function RichText({ text, className = "", align = "left", size = "sm" }: { text: string; className?: string; align?: "left" | "center"; size?: "sm" | "card" }) {
+  const blocks = parseRichBlocks(String(text ?? ""));
+  const center = align === "center";
+  const base = size === "card" ? "text-2xl font-semibold leading-snug text-slate-900 sm:text-3xl" : "text-sm leading-relaxed text-slate-700";
+
+  return (
+    <div className={`novus-prose space-y-3 ${base} ${className}`}>
+      {blocks.map((b, bi) => {
+        const k = `b${bi}`;
+        switch (b.t) {
+          case "h":
+            return b.level <= 2 ? (
+              <h4 key={k} className="border-b border-slate-200 pb-1.5 pt-1 text-base font-bold text-slate-900">
+                {renderInline(b.text, k)}
+              </h4>
+            ) : (
+              <h5 key={k} className="pt-1 text-sm font-semibold text-indigo-700">
+                {renderInline(b.text, k)}
+              </h5>
+            );
+          case "p":
+            return (
+              <p key={k} className={center ? "text-center" : ""}>
+                {renderInline(b.text, k)}
+              </p>
+            );
+          case "list":
+            return (
+              <ul key={k} className={`space-y-2 ${center ? "mx-auto max-w-xl text-left" : ""}`}>
+                {b.items.map((it, ii) => (
+                  <li key={`${k}-${ii}`} className="flex gap-2.5" style={{ marginLeft: it.depth * 18 }}>
+                    {it.kind === "ol" ? (
+                      <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-indigo-100 text-[11px] font-bold text-indigo-700">
+                        {it.n}
+                      </span>
+                    ) : (
+                      <span aria-hidden="true" className="mt-[0.6em] h-1.5 w-1.5 shrink-0 rounded-full bg-indigo-500" />
+                    )}
+                    <span className="min-w-0 flex-1">{renderInline(it.text, `${k}-${ii}`)}</span>
+                  </li>
+                ))}
+              </ul>
+            );
+          case "quote":
+            return (
+              <blockquote key={k} className="rounded-r-xl border-l-4 border-indigo-300 bg-indigo-50 px-4 py-2.5 text-slate-700">
+                {renderInline(b.text, k)}
+              </blockquote>
+            );
+          case "code":
+            return (
+              <pre key={k} className="overflow-x-auto rounded-xl bg-slate-950 p-4 font-mono text-xs leading-relaxed text-slate-100">
+                {b.text}
+              </pre>
+            );
+          case "hr":
+            return <hr key={k} className="border-slate-200" />;
+          case "table":
+            return (
+              <div key={k} className="overflow-x-auto rounded-xl border border-slate-200">
+                <table className="w-full text-left text-sm">
+                  <thead>
+                    <tr>
+                      {b.head.map((c, ci) => (
+                        <th key={ci} className="bg-slate-50 px-3 py-2 font-semibold text-slate-800">
+                          {renderInline(c, `${k}-h${ci}`)}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {b.rows.map((row, ri) => (
+                      <tr key={ri} className="border-t border-slate-100">
+                        {row.map((c, ci) => (
+                          <td key={ci} className="px-3 py-2">
+                            {renderInline(c, `${k}-${ri}-${ci}`)}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            );
+        }
+      })}
+    </div>
+  );
+}
+
+function AiSkeleton({ lines = 4 }: { lines?: number }) {
+  return (
+    <div role="status" aria-label="The AI is thinking" className="mt-4 space-y-2.5 rounded-xl border border-slate-200 bg-white p-5">
+      {Array.from({ length: lines }).map((_, i) => (
+        <div key={i} className="novus-shimmer h-3 rounded-full bg-slate-200" style={{ width: `${94 - i * 13}%`, animationDelay: `${i * 120}ms` }} />
+      ))}
+    </div>
+  );
+}
+
 function VisualLabCard({title,children,tag}:{title:string;children:any;tag?:string}) { return <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7"><div className="mb-4 flex items-center justify-between"><h3 className="text-xl font-bold">{title}</h3>{tag&&<span className="rounded-full bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-700">{tag}</span>}</div>{children}</div>; }
 
 function VisualLab() {
@@ -3937,8 +4456,8 @@ function VisualLab() {
   const sum = a ^ b ^ cin, carry = (a&b)|(a&cin)|(b&cin);
   const wave=(kind:string)=>Array.from({length:361},(_,i)=>{const x=i/360*4*Math.PI;let y=Math.sin(x); if(kind==='half') y=Math.max(0,y); if(kind==='full') y=Math.abs(y); if(kind==='bridge') y=Math.abs(y); if(kind==='filtered') y=0.45+0.18*Math.abs(Math.sin(x)); return `${i===0?'M':'L'} ${(i/360*620).toFixed(1)} ${(110-y*70).toFixed(1)}`}).join(' ');
   const binary=(Number(decimal)||0).toString(2);
-  const [visualQuestion,setVisualQuestion]=useState(""); const [visualAnswer,setVisualAnswer]=useState(""); const [visualLoading,setVisualLoading]=useState(false);
-  async function askVisualAI(){setVisualLoading(true);setVisualAnswer("");try{const context=`PN bias ${bias}; rectifier ${rectifier}; filter ${filter}; adder A=${a}, B=${b}, Cin=${cin}, sum=${sum}, carry=${carry}; gate inputs ${gateA},${gateB}; decimal ${decimal}, binary ${binary}.`;const res=await fetch("/api/organise",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"visual",context,question:visualQuestion||"Explain these current interactive states."})});const data=await res.json();if(!res.ok)throw new Error(data.error||"Request failed");setVisualAnswer(data.result||"No answer.");}catch(e:any){setVisualAnswer(e.message||"Could not get explanation.");}finally{setVisualLoading(false);}}
+  const [visualQuestion,setVisualQuestion]=useState(""); const [visualAnswer,setVisualAnswer]=useState(""); const [visualError,setVisualError]=useState(""); const [visualLoading,setVisualLoading]=useState(false);
+  async function askVisualAI(){setVisualLoading(true);setVisualAnswer("");setVisualError("");try{const context=`PN bias ${bias}; rectifier ${rectifier}; filter ${filter}; adder A=${a}, B=${b}, Cin=${cin}, sum=${sum}, carry=${carry}; gate inputs ${gateA},${gateB}; decimal ${decimal}, binary ${binary}.`;const res=await fetch("/api/organise",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"visual",context,question:visualQuestion||"Explain these current interactive states."})});const data=await res.json();if(!res.ok)throw new Error(data.error||"Request failed");setVisualAnswer(data.result||"No answer.");}catch(e:any){setVisualError(e.message||"Could not get explanation.");}finally{setVisualLoading(false);}}
 
   return <section className="space-y-6"><div className="overflow-hidden rounded-3xl bg-gradient-to-br from-indigo-950 via-violet-900 to-slate-900 p-8 text-white sm:p-12"><p className="text-xs font-bold uppercase tracking-[.25em] text-violet-200">NOVUS · INTERACTIVE VISUAL LAB</p><h2 className="mt-3 text-4xl font-black tracking-tight sm:text-5xl">Electronics, made alive.</h2><p className="mt-4 max-w-2xl text-violet-100">Explore circuits by changing inputs, bias, and modes. Visuals are reconstructed from your PDFs—excluding the JPEG question sheet.</p><div className="mt-6 flex flex-wrap gap-2">{['Semiconductors','Rectifiers','Logic','Number systems'].map(x=><span key={x} className="rounded-full border border-white/20 bg-white/10 px-3 py-1.5 text-sm">{x}</span>)}</div></div>
     <div className="grid gap-5 xl:grid-cols-2">
@@ -3948,7 +4467,7 @@ function VisualLab() {
       <VisualLabCard title="Logic-gate playground" tag="Truth table"><div className="flex gap-3"><button type="button" onClick={()=>setGateA(1-gateA)} className="rounded-xl bg-slate-900 px-5 py-3 text-white">A = {gateA} · toggle</button><button type="button" onClick={()=>setGateB(1-gateB)} className="rounded-xl bg-slate-900 px-5 py-3 text-white">B = {gateB} · toggle</button></div><div className="mt-5 grid grid-cols-2 gap-3">{[['AND',gateA&gateB],['OR',gateA|gateB],['XOR',gateA^gateB],['NAND',1-(gateA&gateB)],['NOR',1-(gateA|gateB)],['XNOR',1-(gateA^gateB)]].map(([name,val]:any)=><div key={name} className="flex items-center justify-between rounded-xl border p-4"><span className="font-semibold">{name}</span><span className="rounded-lg bg-indigo-50 px-4 py-2 text-2xl font-black text-indigo-700">{val}</span></div>)}</div><table className="mt-5 w-full text-center text-sm"><thead><tr className="bg-slate-50"><th className="p-2">A</th><th>B</th><th>AND</th><th>OR</th><th>XOR</th></tr></thead><tbody>{[[0,0],[0,1],[1,0],[1,1]].map(([x,y])=><tr key={`${x}${y}`} className="border-t"><td className="p-2">{x}</td><td>{y}</td><td>{x&y}</td><td>{x|y}</td><td>{x^y}</td></tr>)}</tbody></table></VisualLabCard>
       <VisualLabCard title="Number-base converter" tag="Digital Circuits PDF"><label className="text-sm font-semibold">Decimal input</label><input value={decimal} onChange={e=>setDecimal(e.target.value)} type="number" className="mt-2 w-full rounded-xl border p-3"/><div className="mt-4 grid gap-3 sm:grid-cols-3"><div className="rounded-xl bg-slate-950 p-4 text-white"><p className="text-xs text-slate-400">Binary</p><p className="break-all text-2xl font-bold">{binary}</p></div><div className="rounded-xl bg-indigo-50 p-4"><p className="text-xs text-indigo-600">Octal</p><p className="text-2xl font-bold">{(Number(decimal)||0).toString(8)}</p></div><div className="rounded-xl bg-violet-50 p-4"><p className="text-xs text-violet-600">Hexadecimal</p><p className="text-2xl font-bold">{(Number(decimal)||0).toString(16).toUpperCase()}</p></div></div><p className="mt-3 text-sm text-slate-500">Live conversion for non-negative whole numbers. The PDF also illustrates fractional conversion and bit grouping.</p></VisualLabCard>
       <VisualLabCard title="1’s & 2’s complement" tag="Interactive"><label className="text-sm">Enter binary bits</label><input defaultValue="101101" id="complement-input" className="mt-2 w-full rounded-xl border p-3 font-mono"/><button type="button" onClick={()=>{const el=document.getElementById('complement-input') as HTMLInputElement; const bits=el.value.replace(/[^01]/g,'');const one=bits.split('').map(x=>x==='1'?'0':'1').join(''); alert(`1's complement: ${one}\n2's complement: ${(()=>{let carry=1,out='';for(let i=one.length-1;i>=0;i--){const bit=Number(one[i]);const sum=bit+carry;out=(sum%2)+out;carry=Math.floor(sum/2);}return out.padStart(bits.length,'0').slice(-bits.length);})()}`)}} className="mt-3 rounded-xl bg-indigo-600 px-4 py-3 font-semibold text-white">Calculate complements</button><p className="mt-4 rounded-xl bg-slate-50 p-3 text-sm text-slate-600">1’s complement flips every bit. 2’s complement adds 1 to the flipped bit pattern (fixed-width result shown).</p></VisualLabCard>
-    </div><VisualLabCard title="AI electronics tutor" tag="Gemini"><p className="text-sm text-slate-600">Ask about the concepts or interactive settings.</p><textarea value={visualQuestion} onChange={e=>setVisualQuestion(e.target.value)} placeholder="Why does reverse bias widen the depletion region?" rows={3} className="mt-3 w-full rounded-xl border p-3"/><button type="button" disabled={visualLoading} onClick={askVisualAI} className="mt-3 rounded-xl bg-indigo-700 px-5 py-3 font-semibold text-white disabled:opacity-50">{visualLoading?"Thinking…":"Ask AI tutor"}</button>{visualAnswer&&<div className="mt-4 whitespace-pre-wrap rounded-xl bg-slate-50 p-4 text-sm leading-relaxed">{visualAnswer}</div>}</VisualLabCard><div className="rounded-2xl border border-indigo-100 bg-indigo-50 p-5 text-sm text-indigo-800"><b>Visual sources:</b> PN diode and VI curve concepts, rectifier and filtering waveforms, digital gates, adder logic, and number-base/complement operations were reconstructed from the uploaded PDFs. The JPEG question sheet was intentionally ignored.</div></section>;
+    </div><VisualLabCard title="AI electronics tutor" tag="Gemini"><p className="text-sm text-slate-600">Ask about the concepts or interactive settings.</p><textarea value={visualQuestion} onChange={e=>setVisualQuestion(e.target.value)} placeholder="Why does reverse bias widen the depletion region?" rows={3} className="mt-3 w-full rounded-xl border p-3"/><button type="button" disabled={visualLoading} onClick={askVisualAI} className="mt-3 rounded-xl bg-indigo-700 px-5 py-3 font-semibold text-white disabled:opacity-50">{visualLoading?"Thinking…":"Ask AI tutor"}</button>{visualLoading&&<AiSkeleton lines={4}/>}{visualError&&!visualLoading&&<div role="alert" className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{visualError}</div>}{visualAnswer&&!visualLoading&&<div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-5"><RichText text={visualAnswer}/></div>}</VisualLabCard><div className="rounded-2xl border border-indigo-100 bg-indigo-50 p-5 text-sm text-indigo-800"><b>Visual sources:</b> PN diode and VI curve concepts, rectifier and filtering waveforms, digital gates, adder logic, and number-base/complement operations were reconstructed from the uploaded PDFs. The JPEG question sheet was intentionally ignored.</div></section>;
 }
 
 /* ==================================================
